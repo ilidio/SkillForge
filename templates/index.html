@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SkillForge</title>
+    <style>
+        :root {
+            --bg-body: #f7f9fa;
+            --bg-card: #ffffff;
+            --text-main: #2d2f31;
+            --text-secondary: #6a6f73;
+            --border-color: #d1d7dc;
+            --primary-color: #5022c3;
+            --hover-bg: #f7f9fa;
+            --shadow-color: rgba(0,0,0,0.1);
+            --progress-bg: #e0e0e0;
+        }
+
+        [data-theme="dark"] {
+            --bg-body: #1c1d1f;
+            --bg-card: #2d2f31;
+            --text-main: #e0e0e0;
+            --text-secondary: #a0a0a0;
+            --border-color: #3e4143;
+            --primary-color: #cf9fff;
+            --hover-bg: #3e4143;
+            --shadow-color: rgba(0,0,0,0.5);
+            --progress-bg: #3e4143;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: var(--bg-body);
+            color: var(--text-main);
+            margin: 0;
+            padding: 20px;
+            transition: background-color 0.3s, color 0.3s;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .header-section {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 20px;
+            margin-bottom: 20px;
+        }
+        
+        .logo-container {
+            display: flex;
+            align-items: center;
+        }
+        
+        .logo-img {
+            height: 40px; /* Scaled down from the original size */
+            width: auto;
+            display: block;
+        }
+
+        .logo-light { display: block; }
+        .logo-dark { display: none; }
+
+        [data-theme="dark"] .logo-light { display: none; }
+        [data-theme="dark"] .logo-dark { display: block; }
+
+        h1 { margin: 0; display: none; } /* Hide text H1 as we have logo now */
+        
+        .header-controls {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .settings-link {
+            text-decoration: none;
+            color: var(--text-main);
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            padding: 8px 16px;
+            border-radius: 4px;
+            font-weight: 600;
+        }
+        .settings-link:hover { background: var(--hover-bg); }
+        
+        .theme-toggle {
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 1.5em;
+            padding: 0 5px;
+            color: var(--text-main);
+        }
+
+        /* Search Section */
+        .search-section {
+            margin-bottom: 25px;
+            position: relative;
+        }
+        .search-input {
+            width: 100%;
+            padding: 14px 16px;
+            padding-left: 45px; /* Space for icon */
+            font-size: 1rem;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            box-sizing: border-box;
+            transition: all 0.2s;
+            background-color: var(--bg-card);
+            color: var(--text-main);
+        }
+        .search-input:focus {
+            outline: none;
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 3px rgba(80, 34, 195, 0.1);
+        }
+        .search-icon {
+            position: absolute;
+            left: 16px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--text-secondary);
+            font-size: 1.1em;
+            pointer-events: none;
+        }
+
+        .course-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 20px;
+        }
+        .course-card-wrapper {
+            display: flex;
+            flex-direction: column;
+            position: relative;
+        }
+        .course-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            padding: 0; /* Remove padding to allow image to flush */
+            cursor: pointer;
+            transition: box-shadow 0.2s, background-color 0.3s;
+            text-decoration: none;
+            color: inherit;
+            display: block;
+            flex: 1;
+            position: relative;
+            overflow: hidden; /* Ensure image corners respect border radius if added */
+        }
+        .course-thumbnail {
+            width: 100%;
+            height: 160px;
+            object-fit: cover;
+            background-color: var(--hover-bg);
+        }
+        .course-content {
+            padding: 20px;
+        }
+        .course-card:hover {
+            box-shadow: 0 2px 8px var(--shadow-color);
+        }
+        .course-title {
+            font-weight: bold;
+            font-size: 1.1em;
+            margin-bottom: 10px;
+            padding-right: 25px; /* Space for fav icon */
+        }
+        .course-meta {
+            color: var(--text-secondary);
+            font-size: 0.8em;
+            margin-bottom: 10px;
+        }
+        
+        .progress-section {
+            margin-top: 15px;
+        }
+        .progress-text {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.85em;
+            margin-bottom: 5px;
+            color: var(--text-main);
+        }
+        .progress-container {
+            display: none;
+        }
+        
+        /* Circular Progress CSS */
+        .progress-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 15px;
+        }
+        .progress-info {
+            flex: 1;
+            font-size: 0.85em;
+            color: var(--text-secondary);
+        }
+        .progress-stat-label {
+            display: block;
+            margin-bottom: 4px;
+        }
+        .progress-stat-value {
+            color: var(--text-main);
+            font-weight: 600;
+        }
+        
+        .circular-chart {
+            display: block;
+            margin: 0;
+            max-width: 50px;
+            max-height: 50px;
+        }
+        .circle-bg {
+            fill: none;
+            stroke: var(--progress-bg);
+            stroke-width: 3.8;
+        }
+        .circle {
+            fill: none;
+            stroke: var(--primary-color);
+            stroke-width: 2.8;
+            stroke-linecap: round;
+            transition: stroke-dasharray 0.3s ease;
+        }
+        .percentage-text {
+            fill: var(--text-main);
+            font-family: sans-serif;
+            font-weight: bold;
+            font-size: 0.6em; /* 10px equivalent in viewbox */
+            text-anchor: middle;
+        }
+
+        .last-watched {
+            margin-top: 12px;
+            font-size: 0.8em;
+            color: var(--text-secondary);
+            font-style: italic;
+            border-top: 1px solid var(--border-color);
+            padding-top: 8px;
+        }
+        
+        /* Favorite Button */
+        .fav-btn {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: none;
+            border: none;
+            font-size: 1.2em;
+            cursor: pointer;
+            z-index: 10;
+            color: #ccc; /* Default grey */
+            transition: color 0.2s, transform 0.1s;
+        }
+        .fav-btn:hover {
+            transform: scale(1.1);
+            color: #ffb700;
+        }
+        .fav-btn.active {
+            color: #ffb700; /* Gold */
+        }
+        
+        /* Helper for no results */
+        #no-results {
+            display: none;
+            grid-column: 1 / -1;
+            text-align: center;
+            padding: 40px;
+            color: var(--text-secondary);
+            font-size: 1.1em;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header-section">
+            <div class="logo-container">
+                <img src="/static/images/logo.png" alt="SkillForge" class="logo-img logo-light">
+                <img src="/static/images/logo_dark.png" alt="SkillForge" class="logo-img logo-dark">
+                <h1>SkillForge</h1>
+            </div>
+            <div class="header-controls">
+                {% if current_user.is_authenticated %}
+                    <span style="margin-right: 10px; font-weight: 500;">Hi, {{ current_user.name }}</span>
+                    <a href="/analytics" class="settings-link" style="background: #2e7d32; color: white; border: none;">📊 Stats</a>
+                    <a href="/resources" class="settings-link">📂 Vault</a>
+                    <a href="/logout" class="settings-link" style="border-color: #d32f2f; color: #d32f2f;">Logout</a>
+                {% else %}
+                    <span style="margin-right: 10px; color: #666;">(Anonymous)</span>
+                    <a href="/login" class="settings-link" style="background: var(--primary-color); color: white; border: none;">Login</a>
+                {% endif %}
+                <button class="theme-toggle" onclick="toggleTheme()" title="Toggle Dark Mode">🌓</button>
+                <a href="/study" class="settings-link" style="background: var(--bg-card); border-color: var(--primary-color); color: var(--primary-color);">🧠 Study</a>
+                <a href="/settings" class="settings-link">⚙ Settings</a>
+            </div>
+        </div>
+
+        <div class="search-section">
+            <span class="search-icon">🔍</span>
+            <input type="text" id="courseSearch" class="search-input" placeholder="Search for courses..." autocomplete="off">
+        </div>
+        
+        <!-- Playlists Section -->
+        <div id="playlist-section" style="margin-bottom: 30px; display: none;">
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); padding-bottom: 10px; margin-bottom: 15px;">
+                <h2 style="font-size: 1.2em; margin: 0;">My Playlists</h2>
+                <button onclick="createPlaylist()" style="background: none; border: 1px solid var(--primary-color); color: var(--primary-color); padding: 5px 10px; border-radius: 4px; cursor: pointer;">+ New Playlist</button>
+            </div>
+            <div class="course-grid" id="playlist-grid">
+                <!-- Populated by JS -->
+            </div>
+        </div>
+
+        {% if continue_watching %}
+        <div class="continue-section">
+            <h2 style="font-size: 1.2em; margin-bottom: 15px; border-bottom: 1px solid var(--border-color); padding-bottom: 10px;">Continue Watching</h2>
+            <div class="course-grid">
+                {% for item in continue_watching %}
+                <div class="course-card-wrapper">
+                    <a href="/course/{{ item.course_id }}" class="course-card">
+                         {% if item.thumbnail %}
+                        <img src="{{ item.thumbnail }}" class="course-thumbnail" alt="{{ item.course_title }}">
+                        {% else %}
+                        <div class="course-thumbnail" style="display: flex; align-items: center; justify-content: center; color: var(--text-secondary); font-size: 2em;">▶</div>
+                        {% endif %}
+                        <div class="course-content">
+                             <div class="course-meta" style="color: var(--primary-color); font-weight: bold; margin-bottom: 5px;">{{ item.course_title }}</div>
+                            <div class="course-title" style="font-size: 1em;">{{ item.video_title }}</div>
+                            
+                            <div class="progress-row" style="margin-top: 10px;">
+                                <div class="progress-info">
+                                    <span class="progress-stat-label">Resuming at</span>
+                                    <div class="progress-stat-value">
+                                        {{ item.watched_time | format_duration_human }}
+                                    </div>
+                                </div>
+                                <div style="font-size: 0.8em; font-weight: bold;">{{ item.percentage }}%</div>
+                            </div>
+                        </div>
+                    </a>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        <br>
+        {% endif %}
+
+        <div class="course-grid" id="courseGrid">
+            {% for course in courses %}
+            <div class="course-card-wrapper" data-fav="{{ 1 if course.is_favorite else 0 }}">
+                <a href="/course/{{ course.id }}" class="course-card">
+                    {% if course.thumbnail %}
+                    <img src="{{ course.thumbnail }}" class="course-thumbnail" alt="{{ course.title }}">
+                    {% endif %}
+                    <div class="course-content">
+                        <div class="course-title">{{ course.title }}</div>
+                        <div class="course-meta">Added: {{ course.created_at }}</div>
+                        
+                        <div class="progress-row">
+                            <div class="progress-info">
+                                <span class="progress-stat-label">Time Watched</span>
+                                <div class="progress-stat-value">
+                                    {{ course.watched_time | format_duration_human }} / {{ course.total_duration | format_duration_human }}
+                                </div>
+                            </div>
+                            
+                            <svg viewBox="0 0 36 36" class="circular-chart">
+                                <path class="circle-bg"
+                                    d="M18 2.0845
+                                    a 15.9155 15.9155 0 0 1 0 31.831
+                                    a 15.9155 15.9155 0 0 1 0 -31.831"
+                                />
+                                <path class="circle"
+                                    stroke-dasharray="{{ course.percentage }}, 100"
+                                    d="M18 2.0845
+                                    a 15.9155 15.9155 0 0 1 0 31.831
+                                    a 15.9155 15.9155 0 0 1 0 -31.831"
+                                />
+                                <text x="18" y="21" class="percentage-text">{{ course.percentage }}%</text>
+                            </svg>
+                        </div>
+
+                        {% if course.last_video_title %}
+                        <div class="last-watched">
+                            Last: {{ course.last_video_title }}
+                        </div>
+                        {% endif %}
+                    </div>
+                </a>
+                <button class="fav-btn {% if course.is_favorite %}active{% endif %}" 
+                        onclick="toggleFavorite(event, {{ course.id }})" 
+                        title="Toggle Favorite">
+                    ★
+                </button>
+            </div>
+            {% else %}
+            <p>No courses found. Add folders to the 'courses' directory.</p>
+            {% endfor %}
+            
+            <div id="no-results">
+                No courses found matching your search.
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ... existing theme logic ...
+
+        // Playlist Logic
+        function loadPlaylists() {
+            const section = document.getElementById('playlist-section');
+            const grid = document.getElementById('playlist-grid');
+            
+            fetch('/api/get_playlists')
+            .then(res => res.json())
+            .then(data => {
+                if (data.length > 0) {
+                    section.style.display = 'block';
+                    grid.innerHTML = '';
+                    data.forEach(pl => {
+                        grid.innerHTML += `
+                            <div class="course-card-wrapper">
+                                <a href="/playlist/${pl.id}" class="course-card">
+                                    <div class="course-thumbnail" style="display: flex; align-items: center; justify-content: center; background: var(--bg-card); border-bottom: 1px solid var(--border-color); font-size: 2em; color: var(--primary-color);">📑</div>
+                                    <div class="course-content">
+                                        <div class="course-title">${pl.title}</div>
+                                        <div class="course-meta">${pl.item_count} videos</div>
+                                    </div>
+                                </a>
+                            </div>
+                        `;
+                    });
+                }
+            });
+        }
+        
+        function createPlaylist() {
+            const title = prompt("Enter playlist name:");
+            if (title) {
+                fetch('/api/create_playlist', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title: title })
+                }).then(() => loadPlaylists());
+            }
+        }
+        
+        document.addEventListener('DOMContentLoaded', loadPlaylists);
+
+        // Theme Logic
+        function toggleTheme() {
+            const html = document.documentElement;
+            const current = html.getAttribute('data-theme');
+            const next = current === 'dark' ? 'light' : 'dark';
+            html.setAttribute('data-theme', next);
+            localStorage.setItem('theme', next);
+        }
+        
+        // Init Theme
+        (function() {
+            const saved = localStorage.getItem('theme');
+            if (saved) {
+                document.documentElement.setAttribute('data-theme', saved);
+            } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+                document.documentElement.setAttribute('data-theme', 'dark');
+            }
+        })();
+
+        // Search Logic
+        const searchInput = document.getElementById('courseSearch');
+        
+        searchInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+                window.location.href = '/search?q=' + encodeURIComponent(this.value);
+            }
+        });
+
+        // Live filter for index page cards (optional, keep if you want hybrid)
+        searchInput.addEventListener('keyup', function(e) {
+            if (e.key === 'Enter') return; // Handled above
+            
+            const filter = this.value.toUpperCase();
+            const grid = document.getElementById('courseGrid');
+            const cards = grid.querySelectorAll('.course-card-wrapper');
+            const noResults = document.getElementById('no-results');
+            let visibleCount = 0;
+            
+            cards.forEach(card => {
+                const title = card.querySelector('.course-title').innerText;
+                if (title.toUpperCase().indexOf(filter) > -1) {
+                    card.style.display = "";
+                    visibleCount++;
+                } else {
+                    card.style.display = "none";
+                }
+            });
+            
+            if (visibleCount === 0 && cards.length > 0) {
+                noResults.style.display = "block";
+            } else {
+                noResults.style.display = "none";
+            }
+        });
+
+        // Favorite Logic
+        function toggleFavorite(event, courseId) {
+            // Prevent clicking the card link
+            event.preventDefault();
+            event.stopPropagation();
+            
+            const btn = event.currentTarget;
+            
+            fetch('/api/toggle_favorite', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ course_id: courseId }),
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    // Toggle UI class
+                    btn.classList.toggle('active');
+                    // Reload to re-sort (optional, but cleaner for "favorites first")
+                    window.location.reload();
+                }
+            });
+        }
+    </script>
+</body>
+</html>

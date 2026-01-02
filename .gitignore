@@ -1,0 +1,6 @@
+
+.DS_Store
+venv/
+courses/
+ __pycache__/
+ courses.db

@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Settings - SkillForge</title>
+    <!-- Quill CSS -->
+    <link href="https://cdn.quilljs.com/1.3.6/quill.snow.css" rel="stylesheet">
+    <style>
+        :root {
+            --bg-body: #f7f9fa;
+            --bg-card: #ffffff;
+            --bg-actions: #fffafa;
+            --text-main: #2d2f31;
+            --text-secondary: #6a6f73;
+            --border-color: #d1d7dc;
+            --danger-border: #ffcfcf;
+            --primary-color: #5022c3;
+            --hover-bg: #f5f5f5;
+            --progress-bg: #e0e0e0;
+        }
+
+        [data-theme="dark"] {
+            --bg-body: #1c1d1f;
+            --bg-card: #2d2f31;
+            --bg-actions: #2d2f31;
+            --text-main: #e0e0e0;
+            --text-secondary: #a0a0a0;
+            --border-color: #3e4143;
+            --danger-border: #5c2b2b;
+            --primary-color: #cf9fff;
+            --hover-bg: #3e4143;
+            --progress-bg: #3e4143;
+        }
+        
+        /* Quill Dark Mode Overrides */
+        [data-theme="dark"] .ql-toolbar {
+            background-color: #ccc;
+            border-color: var(--border-color) !important;
+        }
+        [data-theme="dark"] .ql-container {
+            border-color: var(--border-color) !important;
+            background-color: var(--bg-card);
+            color: var(--text-main);
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: var(--bg-body);
+            color: var(--text-main);
+            margin: 0;
+            padding: 20px;
+            transition: background-color 0.3s, color 0.3s;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        .header-section {
+            display: flex;
+            align-items: center;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 20px;
+            margin-bottom: 30px;
+        }
+        .logo-img {
+            height: 30px;
+            width: auto;
+            margin-right: 15px;
+        }
+        .logo-light { display: block; }
+        .logo-dark { display: none; }
+        [data-theme="dark"] .logo-light { display: none; }
+        [data-theme="dark"] .logo-dark { display: block; }
+        
+        .back-link {
+            text-decoration: none;
+            color: var(--primary-color);
+            font-weight: bold;
+            margin-right: 20px;
+            font-size: 1.2em;
+        }
+        h1 { margin: 0; flex: 1; }
+        
+        .theme-toggle {
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 1.5em;
+            padding: 0 5px;
+            color: var(--text-main);
+        }
+        
+        .global-actions {
+            background: var(--bg-actions);
+            border: 1px solid var(--danger-border);
+            padding: 20px;
+            border-radius: 6px;
+            margin-bottom: 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .danger-label {
+            color: #d32f2f;
+            font-weight: bold;
+        }
+        [data-theme="dark"] .danger-label {
+            color: #ef5350;
+        }
+        
+        .reset-all-btn {
+            background: #d32f2f;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            cursor: pointer;
+            border-radius: 4px;
+            font-weight: 600;
+        }
+        .reset-all-btn:hover { background: #b71c1c; }
+
+        .course-list {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+        }
+        .course-item {
+            padding: 20px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+        }
+        .course-item:last-child { border-bottom: none; }
+        
+        .course-header {
+            display: flex;
+            align-items: center;
+            width: 100%;
+        }
+        
+        .course-info {
+            flex: 1;
+            margin-right: 20px;
+        }
+        .course-title {
+            font-weight: 600;
+            font-size: 1.1em;
+            margin-bottom: 8px;
+        }
+        .progress-stats {
+            color: var(--text-secondary);
+            font-size: 0.9em;
+            margin-bottom: 8px;
+        }
+        
+        .progress-container {
+            background-color: var(--progress-bg);
+            border-radius: 4px;
+            height: 8px;
+            width: 100%;
+            overflow: hidden;
+        }
+        .progress-bar {
+            background-color: var(--primary-color);
+            height: 100%;
+            transition: width 0.3s ease;
+        }
+        
+        .action-group {
+            display: flex;
+            gap: 10px;
+        }
+        
+        .btn {
+            background: none;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            padding: 8px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9em;
+            white-space: nowrap;
+        }
+        .btn:hover {
+            background-color: var(--hover-bg);
+            color: var(--text-main);
+        }
+        .edit-btn { color: var(--primary-color); border-color: var(--primary-color); }
+        .edit-btn:hover { background-color: var(--primary-color); color: white; }
+
+        /* Modal Styles */
+        .modal {
+            display: none; 
+            position: fixed; 
+            z-index: 1000; 
+            left: 0;
+            top: 0;
+            width: 100%; 
+            height: 100%; 
+            overflow: auto; 
+            background-color: rgba(0,0,0,0.5); 
+        }
+        .modal-content {
+            background-color: var(--bg-card);
+            margin: 5% auto; 
+            padding: 20px;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            width: 80%; 
+            max-width: 800px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+        }
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 10px;
+        }
+        .close-modal {
+            color: var(--text-secondary);
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        .close-modal:hover { color: var(--text-main); }
+        
+        .editor-container {
+            height: 300px;
+            margin-bottom: 20px;
+        }
+        
+        .save-btn {
+            background-color: var(--primary-color);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 1em;
+            float: right;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header-section">
+            <a href="/" class="back-link">←</a>
+            <img src="/static/images/logo.png" alt="SkillForge" class="logo-img logo-light">
+            <img src="/static/images/logo_dark.png" alt="SkillForge" class="logo-img logo-dark">
+            <h1>Settings & Progress</h1>
+            <button class="theme-toggle" onclick="toggleTheme()" title="Toggle Dark Mode">🌓</button>
+        </div>
+
+        <div class="global-actions" style="border-color: var(--primary-color); background: var(--bg-card);">
+            <div>
+                <div class="danger-label" style="color: var(--primary-color);">Backup & Restore</div>
+                <div style="font-size: 0.9em; color: var(--text-secondary); margin-top: 4px;">Export your progress, notes, and bookmarks to a JSON file.</div>
+            </div>
+            <div style="display: flex; gap: 10px;">
+                <button class="btn" onclick="exportData()" style="color: var(--primary-color); border-color: var(--primary-color);">Export Data</button>
+                <button class="btn" onclick="document.getElementById('importFile').click()">Import Data</button>
+                <input type="file" id="importFile" style="display: none;" onchange="importData(this)">
+            </div>
+        </div>
+
+        <div class="global-actions">
+            <div>
+                <div class="danger-label">Global Reset</div>
+                <div style="font-size: 0.9em; color: var(--text-secondary); margin-top: 4px;">Clear all progress and history for all courses.</div>
+            </div>
+            <button class="reset-all-btn" onclick="resetAllProgress()">Reset All Progress</button>
+        </div>
+
+        <div class="course-list">
+            {% for course in courses %}
+            <div class="course-item">
+                <div class="course-header">
+                    <div class="course-info">
+                        <div class="course-title">{{ course.title }}</div>
+                        <div class="progress-stats">
+                            {{ course.watched_count }} / {{ course.total_videos }} videos watched ({{ course.percentage }}%)
+                        </div>
+                        <div class="progress-container">
+                            <div class="progress-bar" style="width: {{ course.percentage }}%"></div>
+                        </div>
+                    </div>
+                    <div class="action-group">
+                        <button class="btn edit-btn" onclick='openEditor({{ course.id }}, {{ course.description | tojson }}, {{ course.alternate_title | tojson }})'>Edit Info</button>
+                        <button class="btn" onclick="openProgressManager({{ course.id }}, '{{ course.title | replace("'", "\\'") }}')">Manage Progress</button>
+                        <a href="/certificate/{{ course.id }}?preview=true" class="btn" target="_blank" style="text-decoration: none; line-height: 1.2;">Test Cert</a>
+                        <button class="btn" onclick="resetProgress({{ course.id }})" style="color: #d32f2f; border-color: #d32f2f;">Reset Course</button>
+                    </div>
+                </div>
+            </div>
+            {% else %}
+            <div style="padding: 20px; text-align: center; color: var(--text-secondary);">No courses found.</div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- Edit Modal -->
+    <div id="editorModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="modalTitle">Edit Course Details</h2>
+                <span class="close-modal" onclick="closeEditor()">&times;</span>
+            </div>
+            
+            <div style="margin-bottom: 15px;">
+                <label for="altTitle" style="display:block; margin-bottom:5px; font-weight:bold;">Alternate Title (for Certificate)</label>
+                <input type="text" id="altTitle" placeholder="Enter a shorter title if the original is too long" 
+                       style="width:100%; padding:10px; border:1px solid var(--border-color); border-radius:4px; box-sizing:border-box;">
+            </div>
+
+            <div id="quill-editor" class="editor-container"></div>
+            <button class="save-btn" onclick="saveDescription()">Save Details</button>
+        </div>
+    </div>
+    
+    <!-- Progress Manager Modal -->
+    <div id="progressModal" class="modal">
+        <div class="modal-content" style="max-height: 80vh; display: flex; flex-direction: column;">
+            <div class="modal-header">
+                <h2 id="pmTitle">Manage Progress</h2>
+                <span class="close-modal" onclick="closeProgressManager()">&times;</span>
+            </div>
+            <div style="margin-bottom: 15px; color: var(--text-secondary);">
+                Reset individual videos below. This resets watched time to 00:00 and marks as not completed.
+            </div>
+            <div id="pmContent" style="overflow-y: auto; flex: 1;">
+                <div style="text-align: center; padding: 20px;">Loading...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Quill JS -->
+    <script src="https://cdn.quilljs.com/1.3.6/quill.js"></script>
+    <script>
+        // Init Quill
+        var quill = new Quill('#quill-editor', {
+            theme: 'snow'
+        });
+        
+        let currentCourseId = null;
+
+        // Theme Logic
+        function toggleTheme() {
+            const html = document.documentElement;
+            const current = html.getAttribute('data-theme');
+            const next = current === 'dark' ? 'light' : 'dark';
+            html.setAttribute('data-theme', next);
+            localStorage.setItem('theme', next);
+        }
+        
+        (function() {
+            const saved = localStorage.getItem('theme');
+            if (saved) {
+                document.documentElement.setAttribute('data-theme', saved);
+            } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+                document.documentElement.setAttribute('data-theme', 'dark');
+            }
+        })();
+
+        // Editor Functions
+        function openEditor(id, description, alternateTitle) {
+            currentCourseId = id;
+            // Set content (handle nulls)
+            const delta = quill.clipboard.convert(description || "");
+            quill.setContents(delta, 'silent');
+            
+            document.getElementById('altTitle').value = alternateTitle || "";
+            
+            document.getElementById('editorModal').style.display = "block";
+        }
+        
+        function closeEditor() {
+            document.getElementById('editorModal').style.display = "none";
+        }
+        
+        // Progress Manager Functions
+        function openProgressManager(courseId, courseTitle) {
+            document.getElementById('pmTitle').innerText = 'Manage Progress: ' + courseTitle;
+            document.getElementById('progressModal').style.display = 'block';
+            document.getElementById('pmContent').innerHTML = '<div style="text-align: center; padding: 20px;">Loading videos...</div>';
+            
+            fetch('/api/get_course_videos/' + courseId)
+            .then(res => res.json())
+            .then(data => {
+                renderProgressList(courseId, data.structure);
+            });
+        }
+        
+        function closeProgressManager() {
+            document.getElementById('progressModal').style.display = 'none';
+        }
+        
+        function renderProgressList(courseId, modules) {
+            const container = document.getElementById('pmContent');
+            container.innerHTML = '';
+            
+            if (modules.length === 0) {
+                container.innerHTML = '<div style="padding: 20px;">No videos found.</div>';
+                return;
+            }
+            
+            modules.forEach(mod => {
+                const modHeader = document.createElement('div');
+                modHeader.style.cssText = 'background: var(--bg-body); padding: 10px; font-weight: bold; border-bottom: 1px solid var(--border-color); margin-top: 10px;';
+                modHeader.innerText = mod.title;
+                container.appendChild(modHeader);
+                
+                mod.videos.forEach(vid => {
+                    const row = document.createElement('div');
+                    row.style.cssText = 'display: flex; justify-content: space-between; align-items: center; padding: 10px; border-bottom: 1px solid var(--border-color);';
+                    
+                    const info = document.createElement('div');
+                    
+                    // Format time helper
+                    const formatTime = (s) => {
+                        if (!s) return '00:00';
+                        const sec = parseInt(s, 10);
+                        const m = Math.floor(sec / 60);
+                        const ss = sec % 60;
+                        return `${m}:${ss.toString().padStart(2, '0')}`;
+                    };
+                    
+                    let status = '<span style="color: var(--text-secondary);">Not Started</span>';
+                    if (vid.is_completed) status = '<span style="color: green;">✓ Completed</span>';
+                    else if (vid.watched_time > 0) status = `<span style="color: orange;">In Progress (${formatTime(vid.watched_time)})</span>`;
+                    
+                    info.innerHTML = `<div>${vid.title}</div><div style="font-size: 0.85em; margin-top: 4px;">${status}</div>`;
+                    
+                    const btn = document.createElement('button');
+                    btn.innerText = 'Reset';
+                    btn.className = 'btn';
+                    btn.style.cssText = 'font-size: 0.8em; padding: 4px 8px; color: #d32f2f; border-color: #ffcfcf;';
+                    
+                    if (vid.watched_time === 0 && !vid.is_completed) {
+                        btn.disabled = true;
+                        btn.style.opacity = '0.5';
+                        btn.style.cursor = 'default';
+                        btn.style.borderColor = 'transparent';
+                    } else {
+                        btn.onclick = () => resetVideoProgress(courseId, vid.path, row);
+                    }
+                    
+                    row.appendChild(info);
+                    row.appendChild(btn);
+                    container.appendChild(row);
+                });
+            });
+        }
+        
+        function resetVideoProgress(courseId, videoPath, rowElement) {
+            if (!confirm('Reset progress for this video?')) return;
+            
+            fetch('/api/reset_progress', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ video_path: videoPath }),
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    // Update UI row to reflect reset
+                    const statusDiv = rowElement.querySelector('div > div:nth-child(2)');
+                    statusDiv.innerHTML = '<span style="color: var(--text-secondary);">Not Started</span>';
+                    const btn = rowElement.querySelector('button');
+                    btn.disabled = true;
+                    btn.style.opacity = '0.5';
+                    btn.style.cursor = 'default';
+                    btn.style.borderColor = 'transparent';
+                }
+            });
+        }
+        
+        window.onclick = function(event) {
+            if (event.target == document.getElementById('editorModal')) {
+                closeEditor();
+            }
+            if (event.target == document.getElementById('progressModal')) {
+                closeProgressManager();
+            }
+        }
+
+        function saveDescription() {
+            if (!currentCourseId) return;
+            
+            const html = quill.root.innerHTML;
+            const altTitle = document.getElementById('altTitle').value;
+            
+            fetch('/api/update_course_description', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    course_id: currentCourseId,
+                    description: html,
+                    alternate_title: altTitle
+                }),
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    alert('Details saved!');
+                    closeEditor();
+                    location.reload(); // Reload to update local data context
+                } else {
+                    alert('Error saving details');
+                }
+            });
+        }
+
+        // Backup Functions
+        function exportData() {
+            window.location.href = '/api/backup';
+        }
+        
+        function importData(input) {
+            const file = input.files[0];
+            if (!file) return;
+            
+            if (!confirm('This will merge the backup data with your current progress. Continue?')) {
+                input.value = '';
+                return;
+            }
+            
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            fetch('/api/restore', {
+                method: 'POST',
+                body: formData
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    alert('Restore successful!');
+                    window.location.reload();
+                } else {
+                    alert('Error: ' + data.message);
+                }
+            })
+            .catch(err => alert('Error: ' + err));
+        }
+
+        // Reset Functions
+        function resetProgress(courseId) {
+            if (confirm('Are you sure you want to reset progress for this specific course?')) {
+                performReset(courseId);
+            }
+        }
+
+        function resetAllProgress() {
+            if (confirm('WARNING: Are you sure you want to reset progress for ALL courses? This cannot be undone.')) {
+                performReset('all');
+            }
+        }
+
+        function performReset(id) {
+            fetch('/api/reset_progress', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ course_id: id }),
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    window.location.reload();
+                }
+            });
+        }
+    </script>
+</body>
+</html>

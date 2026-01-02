@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  skillforge:
+    build: .
+    container_name: skillforge
+    ports:
+      - "5001:5001"
+    volumes:
+      # Map your local courses folder to the container
+      - ./courses:/app/courses
+      # Persist the database (create an empty file first if it doesn't exist: touch courses.db)
+      - ./courses.db:/app/courses.db
+    restart: unless-stopped

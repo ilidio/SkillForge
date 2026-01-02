@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Search Results - SkillForge</title>
+    <style>
+        :root {
+            --bg-body: #f7f9fa;
+            --bg-card: #ffffff;
+            --text-main: #2d2f31;
+            --text-secondary: #6a6f73;
+            --border-color: #d1d7dc;
+            --primary-color: #5022c3;
+            --hover-bg: #f7f9fa;
+        }
+        [data-theme="dark"] {
+            --bg-body: #1c1d1f;
+            --bg-card: #2d2f31;
+            --text-main: #e0e0e0;
+            --text-secondary: #a0a0a0;
+            --border-color: #3e4143;
+            --primary-color: #cf9fff;
+            --hover-bg: #3e4143;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: var(--bg-body);
+            color: var(--text-main);
+            margin: 0;
+            padding: 20px;
+        }
+        .container { max-width: 800px; margin: 0 auto; }
+        .header { margin-bottom: 30px; display: flex; align-items: center; }
+        .back-link { text-decoration: none; color: var(--primary-color); margin-right: 15px; font-weight: bold; }
+        
+        .section-title {
+            font-size: 1.2em;
+            margin: 30px 0 15px;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 10px;
+        }
+        
+        .result-item {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            padding: 15px;
+            margin-bottom: 10px;
+            border-radius: 4px;
+        }
+        .result-item a { text-decoration: none; color: inherit; display: block; }
+        .result-title { font-weight: bold; color: var(--primary-color); }
+        .result-meta { font-size: 0.9em; color: var(--text-secondary); margin-top: 5px; }
+        .result-match { 
+            margin-top: 8px; 
+            font-size: 0.9em; 
+            background: var(--hover-bg); 
+            padding: 8px; 
+            border-radius: 4px; 
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <a href="/" class="back-link">← Home</a>
+            <h1>Search: "{{ query }}"</h1>
+        </div>
+        
+        <div class="section-title">Videos</div>
+        {% if results.videos %}
+            {% for v in results.videos %}
+            <div class="result-item">
+                <a href="/course/{{ v.course_id }}">
+                    <div class="result-title">{{ v.title }}</div>
+                    <div class="result-meta">in {{ v.course_title }}</div>
+                </a>
+            </div>
+            {% endfor %}
+        {% else %}
+            <p>No videos found.</p>
+        {% endif %}
+        
+        <div class="section-title">My Notes</div>
+        {% if results.notes %}
+            {% for n in results.notes %}
+            <div class="result-item">
+                <a href="/course/{{ n.course_id }}">
+                    <div class="result-title">Note in: {{ n.video_title }}</div>
+                    <div class="result-meta">Course: {{ n.course_title }}</div>
+                    <div class="result-match">"...{{ n.content[:100] }}..."</div>
+                </a>
+            </div>
+            {% endfor %}
+        {% else %}
+            <p>No notes found.</p>
+        {% endif %}
+    </div>
+    
+    <script>
+        (function() {
+            const saved = localStorage.getItem('theme');
+            if (saved) {
+                document.documentElement.setAttribute('data-theme', saved);
+            } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+                document.documentElement.setAttribute('data-theme', 'dark');
+            }
+        })();
+    </script>
+</body>
+</html>

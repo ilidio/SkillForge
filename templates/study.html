@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Study Deck - SkillForge</title>
+    <style>
+        :root {
+            --bg-body: #f7f9fa;
+            --bg-card: #ffffff;
+            --text-main: #2d2f31;
+            --text-secondary: #6a6f73;
+            --border-color: #d1d7dc;
+            --primary-color: #5022c3;
+            --hover-bg: #f7f9fa;
+        }
+        [data-theme="dark"] {
+            --bg-body: #1c1d1f;
+            --bg-card: #2d2f31;
+            --text-main: #e0e0e0;
+            --text-secondary: #a0a0a0;
+            --border-color: #3e4143;
+            --primary-color: #cf9fff;
+            --hover-bg: #3e4143;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: var(--bg-body);
+            color: var(--text-main);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            height: 100vh;
+        }
+        .header {
+            width: 100%; max-width: 600px;
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 20px;
+        }
+        .back-link { text-decoration: none; color: var(--primary-color); font-weight: bold; }
+        
+        .flashcard-container {
+            width: 100%; max-width: 600px;
+            height: 400px;
+            perspective: 1000px;
+            position: relative;
+        }
+        .card-inner {
+            position: relative;
+            width: 100%; height: 100%;
+            text-align: center;
+            transition: transform 0.6s;
+            transform-style: preserve-3d;
+            cursor: pointer;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            border-radius: 12px;
+        }
+        .card-inner.flipped { transform: rotateY(180deg); }
+        
+        .card-front, .card-back {
+            position: absolute;
+            width: 100%; height: 100%;
+            -webkit-backface-visibility: hidden;
+            backface-visibility: hidden;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            background-color: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        .card-back {
+            transform: rotateY(180deg);
+            background-color: var(--hover-bg);
+        }
+        
+        .card-content { font-size: 1.5em; margin-bottom: 20px; }
+        .card-label { color: var(--text-secondary); font-size: 0.9em; text-transform: uppercase; margin-bottom: 10px; }
+        
+        .controls {
+            margin-top: 30px;
+            display: flex; gap: 10px;
+            opacity: 0; pointer-events: none; transition: opacity 0.3s;
+        }
+        .controls.visible { opacity: 1; pointer-events: auto; }
+        
+        .btn {
+            padding: 10px 20px; border: none; border-radius: 4px; color: white; cursor: pointer; font-size: 1em; font-weight: bold;
+            flex: 1;
+        }
+        .btn-hard { background-color: #d32f2f; }
+        .btn-good { background-color: #2e7d32; }
+        .btn-easy { background-color: #1565c0; }
+        
+        .empty-state {
+            text-align: center; margin-top: 100px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <a href="/" class="back-link">← Home</a>
+        <div>Due: <span id="due-count">{{ due_count }}</span></div>
+    </div>
+    
+    {% if due_count > 0 %}
+    <div class="flashcard-container" onclick="flipCard()">
+        <div class="card-inner" id="card-inner">
+            <div class="card-front">
+                <div class="card-label">Question</div>
+                <div class="card-content" id="q-text"></div>
+                <div style="font-size: 0.8em; color: var(--text-secondary); margin-top: 20px;">(Click to reveal answer)</div>
+            </div>
+            <div class="card-back">
+                <div class="card-label">Answer</div>
+                <div class="card-content" id="a-text"></div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="controls" id="controls">
+        <button class="btn btn-hard" onclick="rateCard(event, 3)">Hard (1d)</button>
+        <button class="btn btn-good" onclick="rateCard(event, 4)">Good</button>
+        <button class="btn btn-easy" onclick="rateCard(event, 5)">Easy</button>
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <h2>🎉 All caught up!</h2>
+        <p>No flashcards due for review today.</p>
+        <a href="/" class="back-link">Back to Courses</a>
+    </div>
+    {% endif %}
+
+    <script>
+        // Init Theme
+        (function() {
+            const saved = localStorage.getItem('theme');
+            if (saved) document.documentElement.setAttribute('data-theme', saved);
+        })();
+
+        const cards = {{ cards | tojson }};
+        let currentIdx = 0;
+        
+        function loadCard() {
+            if (currentIdx >= cards.length) {
+                window.location.reload(); // Show empty state
+                return;
+            }
+            const card = cards[currentIdx];
+            document.getElementById('q-text').innerText = card.front;
+            document.getElementById('a-text').innerText = card.back;
+            
+            document.getElementById('card-inner').classList.remove('flipped');
+            document.getElementById('controls').classList.remove('visible');
+        }
+        
+        function flipCard() {
+            document.getElementById('card-inner').classList.add('flipped');
+            document.getElementById('controls').classList.add('visible');
+        }
+        
+        function rateCard(e, quality) {
+            e.stopPropagation();
+            const card = cards[currentIdx];
+            
+            fetch('/api/review_flashcard', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: card.id, quality: quality })
+            })
+            .then(() => {
+                currentIdx++;
+                loadCard();
+                document.getElementById('due-count').innerText = cards.length - currentIdx;
+            });
+        }
+        
+        if (cards.length > 0) loadCard();
+    </script>
+</body>
+</html>

@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Analytics Dashboard - SkillForge</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --bg-body: #f7f9fa;
+            --bg-card: #ffffff;
+            --text-main: #2d2f31;
+            --text-secondary: #6a6f73;
+            --border-color: #d1d7dc;
+            --primary-color: #5022c3;
+            --hover-bg: #f7f9fa;
+        }
+        [data-theme="dark"] {
+            --bg-body: #1c1d1f;
+            --bg-card: #2d2f31;
+            --text-main: #e0e0e0;
+            --text-secondary: #a0a0a0;
+            --border-color: #3e4143;
+            --primary-color: #cf9fff;
+            --hover-bg: #3e4143;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: var(--bg-body);
+            color: var(--text-main);
+            margin: 0;
+            padding: 20px;
+        }
+        .container { max-width: 1000px; margin: 0 auto; }
+        .header { margin-bottom: 30px; display: flex; align-items: center; }
+        .back-link { text-decoration: none; color: var(--primary-color); margin-right: 15px; font-weight: bold; }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+            margin-bottom: 40px;
+        }
+        .stat-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            padding: 25px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        .stat-val { font-size: 2.5em; font-weight: bold; color: var(--primary-color); }
+        .stat-label { color: var(--text-secondary); margin-top: 5px; font-size: 1.1em; }
+        
+        .heatmap-container {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            padding: 20px;
+            border-radius: 8px;
+            overflow-x: auto;
+        }
+        
+        /* Github style heatmap css grid */
+        .heatmap-grid {
+            display: flex;
+            gap: 4px;
+        }
+        .week-col {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .day-box {
+            width: 12px;
+            height: 12px;
+            border-radius: 2px;
+            background-color: var(--hover-bg); /* Level 0 */
+        }
+        .day-box.l1 { background-color: #9be9a8; }
+        [data-theme="dark"] .day-box.l1 { background-color: #0e4429; }
+        
+        .day-box.l2 { background-color: #40c463; }
+        [data-theme="dark"] .day-box.l2 { background-color: #006d32; }
+        
+        .day-box.l3 { background-color: #30a14e; }
+        [data-theme="dark"] .day-box.l3 { background-color: #26a641; }
+        
+        .day-box.l4 { background-color: #216e39; }
+        [data-theme="dark"] .day-box.l4 { background-color: #39d353; }
+        
+        .achievements-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 40px;
+        }
+        .achievement-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            padding: 15px;
+            border-radius: 8px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+            opacity: 0.5;
+            transition: transform 0.2s;
+        }
+        .achievement-card.unlocked {
+            opacity: 1;
+            border-color: var(--primary-color);
+            background: linear-gradient(to bottom right, var(--bg-card), rgba(80, 34, 195, 0.05));
+        }
+        .achievement-card.unlocked:hover {
+            transform: translateY(-2px);
+        }
+        .ach-icon { font-size: 3em; margin-bottom: 10px; }
+        .ach-title { font-weight: bold; margin-bottom: 5px; }
+        .ach-desc { font-size: 0.9em; color: var(--text-secondary); }
+        .ach-date { font-size: 0.8em; color: var(--primary-color); margin-top: 10px; }
+
+        h2 { margin-bottom: 20px; font-size: 1.4em; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <a href="/" class="back-link">← Home</a>
+            <h1>Learning Analytics</h1>
+        </div>
+        
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-val">{{ (total_time / 3600) | round(1) }}h</div>
+                <div class="stat-label">Total Learning Time</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-val">{{ streak }}</div>
+                <div class="stat-label">Day Streak 🔥</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-val">{{ total_completed }}</div>
+                <div class="stat-label">Videos Completed</div>
+            </div>
+        </div>
+
+        <h2>Achievements</h2>
+        <div class="achievements-grid">
+            {% for ach in achievements %}
+            <div class="achievement-card {{ 'unlocked' if ach.unlocked else '' }}">
+                <div class="ach-icon">{{ ach.icon }}</div>
+                <div class="ach-title">{{ ach.title }}</div>
+                <div class="ach-desc">{{ ach.description }}</div>
+                {% if ach.unlocked %}
+                <div class="ach-date">Unlocked: {{ ach.unlocked_at[:10] }}</div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+        
+        <h2>Activity Heatmap (Last 365 Days)</h2>
+        <div class="heatmap-container" id="heatmap">
+            <!-- JS will populate -->
+        </div>
+    </div>
+    
+    <script>
+        // Init Theme
+        (function() {
+            const saved = localStorage.getItem('theme');
+            if (saved) document.documentElement.setAttribute('data-theme', saved);
+        })();
+        
+        const activityData = {{ activity_data | tojson }};
+        
+        function renderHeatmap() {
+            const container = document.getElementById('heatmap');
+            const grid = document.createElement('div');
+            grid.className = 'heatmap-grid';
+            
+            // Generate last 52 weeks
+            const today = new Date();
+            // Start from 52 weeks ago (approx)
+            const startDate = new Date();
+            startDate.setDate(today.getDate() - 365);
+            
+            // Adjust to start on a Sunday
+            while (startDate.getDay() !== 0) {
+                startDate.setDate(startDate.getDate() - 1);
+            }
+            
+            let current = new Date(startDate);
+            
+            // Generate 53 columns (weeks)
+            for (let w = 0; w < 53; w++) {
+                const col = document.createElement('div');
+                col.className = 'week-col';
+                
+                for (let d = 0; d < 7; d++) {
+                    const box = document.createElement('div');
+                    box.className = 'day-box';
+                    
+                    const dateStr = current.toISOString().split('T')[0];
+                    const data = activityData[dateStr];
+                    
+                    if (data) {
+                        const secs = data.seconds;
+                        if (secs > 3600) box.classList.add('l4');
+                        else if (secs > 1800) box.classList.add('l3');
+                        else if (secs > 600) box.classList.add('l2');
+                        else if (secs > 0) box.classList.add('l1');
+                        
+                        box.title = `${dateStr}: ${Math.round(secs/60)} mins`;
+                    } else {
+                        box.title = `${dateStr}: No activity`;
+                    }
+                    
+                    col.appendChild(box);
+                    current.setDate(current.getDate() + 1);
+                }
+                grid.appendChild(col);
+            }
+            container.appendChild(grid);
+        }
+        
+        renderHeatmap();
+    </script>
+</body>
+</html>

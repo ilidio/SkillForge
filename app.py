@@ -1,0 +1,1539 @@
+import os
+import sqlite3
+import re
+from flask import Flask, render_template, jsonify, send_from_directory, request, abort, redirect, url_for, flash, send_file
+from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
+from werkzeug.security import generate_password_hash, check_password_hash
+import uuid
+import datetime
+import io
+import json
+from reportlab.lib.pagesizes import landscape, A4
+from reportlab.pdfgen import canvas
+from reportlab.lib import colors
+from reportlab.platypus import Paragraph, Frame
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_CENTER
+from tinytag import TinyTag
+
+app = Flask(__name__)
+app.secret_key = 'skillforge_secret_key_change_this_in_production'  # Required for sessions
+
+# --- Configuration ---
+DB_FILE = "courses.db"
+COURSES_DIR = "courses"
+
+# --- Login Manager Setup ---
+login_manager = LoginManager()
+login_manager.init_app(app)
+login_manager.login_view = 'login'
+
+# --- User Model ---
+class User(UserMixin):
+    def __init__(self, id, username, name, address, is_admin=False):
+        self.id = id
+        self.username = username
+        self.name = name
+        self.address = address
+        self.is_admin = is_admin
+
+@login_manager.user_loader
+def load_user(user_id):
+    conn = get_db_connection()
+    user_row = conn.execute('SELECT * FROM users WHERE id = ?', (user_id,)).fetchone()
+    conn.close()
+    if user_row:
+        return User(user_row['id'], user_row['username'], user_row['name'], user_row['address'])
+    return None
+
+@app.template_filter('format_time')
+def format_time(seconds):
+    if not seconds: return "00:00"
+    m, s = divmod(int(seconds), 60)
+    h, m = divmod(m, 60)
+    if h > 0:
+        return f"{h:d}:{m:02d}:{s:02d}"
+    return f"{m:02d}:{s:02d}"
+
+@app.template_filter('format_duration_human')
+def format_duration_human(seconds):
+    if not seconds: return "0m"
+    m, s = divmod(int(seconds), 60)
+    h, m = divmod(m, 60)
+    if h > 0:
+        return f"{h}h {m}m"
+    return f"{m}m"
+
+# --- Subtitle Helper ---
+def srt_to_vtt(content):
+    """Simple regex-based SRT to VTT converter"""
+    vtt = ["WEBVTT\n\n"]
+    # Normalize line endings
+    content = content.replace('\r\n', '\n').replace('\r', '\n')
+    
+    # Split by double newlines to get blocks
+    blocks = content.strip().split('\n\n')
+    
+    for block in blocks:
+        lines = block.split('\n')
+        if len(lines) >= 2:
+            # Check if first line looks like an index
+            if lines[0].isdigit():
+                timestamp_line_idx = 1
+            else:
+                timestamp_line_idx = 0
+            
+            if timestamp_line_idx < len(lines):
+                ts = lines[timestamp_line_idx]
+                ts = ts.replace(',', '.') # SRT uses comma, VTT uses dot
+                
+                payload = lines[timestamp_line_idx+1:]
+                
+                vtt.append(f"{ts}\n")
+                vtt.extend([l + '\n' for l in payload])
+                vtt.append('\n')
+                
+    return "".join(vtt)
+
+def parse_subtitle_to_json(content):
+    """Parses SRT or VTT content into a list of subtitle objects."""
+    content = content.replace('\r\n', '\n').replace('\r', '\n')
+    blocks = content.strip().split('\n\n')
+    transcript = []
+    
+    for block in blocks:
+        lines = block.split('\n')
+        if len(lines) >= 2:
+            timestamp_line = lines[1] if lines[0].isdigit() else lines[0]
+            if '-->' in timestamp_line:
+                start_time_str = timestamp_line.split('-->')[0].strip().replace(',', '.')
+                
+                # Convert "HH:MM:SS.mmm" or "MM:SS.mmm" to seconds
+                parts = start_time_str.split(':')
+                seconds = 0
+                if len(parts) == 3: # HH:MM:SS.mmm
+                    seconds = int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
+                elif len(parts) == 2: # MM:SS.mmm
+                    seconds = int(parts[0]) * 60 + float(parts[1])
+                
+                text = " ".join(lines[lines.index(timestamp_line)+1:])
+                transcript.append({'start': seconds, 'text': text})
+    return transcript
+
+# --- Achievements Configuration ---
+ACHIEVEMENTS = {
+    'first_steps': {
+        'title': 'First Steps',
+        'description': 'Watch your first video segment.',
+        'icon': '🌱'
+    },
+    'dedicated_learner': {
+        'title': 'Dedicated Learner',
+        'description': 'Accumulate 1 hour of watch time.',
+        'icon': '🎓'
+    },
+    'knowledge_sponge': {
+        'title': 'Knowledge Sponge',
+        'description': 'Accumulate 10 hours of watch time.',
+        'icon': '🧠'
+    },
+    'night_owl': {
+        'title': 'Night Owl',
+        'description': 'Watch a video between 12 AM and 4 AM.',
+        'icon': '🦉'
+    },
+    'early_bird': {
+        'title': 'Early Bird',
+        'description': 'Watch a video between 5 AM and 8 AM.',
+        'icon': '🐦'
+    },
+    'on_fire': {
+        'title': 'On Fire',
+        'description': 'Maintain a 3-day learning streak.',
+        'icon': '🔥'
+    },
+    'unstoppable': {
+        'title': 'Unstoppable',
+        'description': 'Maintain a 7-day learning streak.',
+        'icon': '🚀'
+    },
+    'weekend_warrior': {
+        'title': 'Weekend Warrior',
+        'description': 'Learn on both Saturday and Sunday.',
+        'icon': '📅'
+    }
+}
+
+def check_new_achievements(conn, user_id):
+    """Checks for new achievements for the user and returns a list of newly unlocked ones."""
+    new_unlocks = []
+    
+    # Get existing achievements
+    existing = {row['achievement_id'] for row in conn.execute('SELECT achievement_id FROM user_achievements WHERE user_id = ?', (user_id,)).fetchall()}
+    
+    # 1. Check Totals
+    total_stats = conn.execute('SELECT SUM(seconds_watched) as t FROM daily_activity WHERE user_id=?', (user_id,)).fetchone()
+    total_time = total_stats['t'] or 0
+    
+    if 'first_steps' not in existing and total_time > 10:
+        new_unlocks.append('first_steps')
+        
+    if 'dedicated_learner' not in existing and total_time >= 3600:
+        new_unlocks.append('dedicated_learner')
+        
+    if 'knowledge_sponge' not in existing and total_time >= 36000:
+        new_unlocks.append('knowledge_sponge')
+
+    # 2. Check Time of Day (using current server time as proxy)
+    now = datetime.datetime.now()
+    hour = now.hour
+    if 'night_owl' not in existing and 0 <= hour < 4:
+        new_unlocks.append('night_owl')
+    if 'early_bird' not in existing and 5 <= hour < 8:
+        new_unlocks.append('early_bird')
+
+    # 3. Check Streaks
+    activity_rows = conn.execute('SELECT date, seconds_watched FROM daily_activity WHERE user_id=? ORDER BY date DESC', (user_id,)).fetchall()
+    streak = 0
+    check_date = datetime.date.today()
+    activity_map = {row['date']: row['seconds_watched'] for row in activity_rows}
+    
+    while True:
+        date_str = check_date.strftime("%Y-%m-%d")
+        if date_str in activity_map and activity_map[date_str] > 0:
+            streak += 1
+            check_date -= datetime.timedelta(days=1)
+        else:
+            # If today has no activity yet, don't break streak from yesterday
+            if date_str == datetime.date.today().strftime("%Y-%m-%d") and streak == 0:
+                 check_date -= datetime.timedelta(days=1)
+                 continue
+            break
+            
+    if 'on_fire' not in existing and streak >= 3:
+        new_unlocks.append('on_fire')
+    if 'unstoppable' not in existing and streak >= 7:
+        new_unlocks.append('unstoppable')
+
+    # 4. Check Weekend Warrior
+    # Need to check if they have activity on a Sat and Sun in the same week? 
+    # Or just "Ever watched on Sat AND Ever watched on Sun"? Let's do the latter for simplicity, or check recent history.
+    # Let's do "Watched on a Sat and a Sun" (anytime).
+    if 'weekend_warrior' not in existing:
+        has_sat = False
+        has_sun = False
+        # Limit to last 30 days to save perf? Or just iterate all.
+        for row in activity_rows:
+            d = datetime.datetime.strptime(row['date'], "%Y-%m-%d")
+            if d.weekday() == 5: has_sat = True
+            if d.weekday() == 6: has_sun = True
+            if has_sat and has_sun:
+                new_unlocks.append('weekend_warrior')
+                break
+
+    # Persist new unlocks
+    for ach_id in new_unlocks:
+        conn.execute('INSERT INTO user_achievements (user_id, achievement_id) VALUES (?, ?)', (user_id, ach_id))
+        
+    # Return enriched objects
+    result = []
+    for aid in new_unlocks:
+        item = ACHIEVEMENTS[aid].copy()
+        item['id'] = aid
+        result.append(item)
+        
+    return result
+
+# --- Helper Functions ---
+
+def get_db_connection():
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init_db():
+    conn = get_db_connection()
+    
+    # 1. Basic Tables
+    conn.executescript('''
+        CREATE TABLE IF NOT EXISTS courses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            folder_name TEXT NOT NULL UNIQUE,
+            is_favorite BOOLEAN DEFAULT 0,
+            description TEXT,
+            alternate_title TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        
+        CREATE TABLE IF NOT EXISTS modules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            course_id INTEGER,
+            title TEXT NOT NULL,
+            order_index INTEGER,
+            FOREIGN KEY (course_id) REFERENCES courses (id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS videos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            module_id INTEGER,
+            title TEXT NOT NULL,
+            filename TEXT NOT NULL,
+            path TEXT NOT NULL,
+            order_index INTEGER,
+            duration REAL DEFAULT 0,
+            FOREIGN KEY (module_id) REFERENCES modules (id) ON DELETE CASCADE
+        );
+        
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            name TEXT,
+            address TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        
+        CREATE TABLE IF NOT EXISTS video_notes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            video_path TEXT NOT NULL,
+            content TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+            UNIQUE(user_id, video_path)
+        );
+
+        CREATE TABLE IF NOT EXISTS course_progress (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            course_id INTEGER NOT NULL,
+            last_video_path TEXT,
+            last_video_title TEXT,
+            last_video_timestamp REAL DEFAULT 0,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (course_id) REFERENCES courses (id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+            UNIQUE(user_id, course_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS watched_videos (
+            user_id INTEGER,
+            course_id INTEGER,
+            video_path TEXT,
+            PRIMARY KEY (user_id, course_id, video_path),
+            FOREIGN KEY (course_id) REFERENCES courses (id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS video_progress (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            video_path TEXT NOT NULL,
+            watched_time REAL DEFAULT 0,
+            is_completed BOOLEAN DEFAULT 0,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+            UNIQUE(user_id, video_path)
+        );
+
+        CREATE TABLE IF NOT EXISTS bookmarks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            course_id INTEGER,
+            video_path TEXT NOT NULL,
+            video_title TEXT,
+            timestamp REAL NOT NULL,
+            note TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+        );
+        
+        CREATE TABLE IF NOT EXISTS daily_activity (
+            user_id INTEGER,
+            date TEXT NOT NULL, -- YYYY-MM-DD
+            seconds_watched REAL DEFAULT 0,
+            videos_completed INTEGER DEFAULT 0,
+            PRIMARY KEY (user_id, date),
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS playlists (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            title TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS playlist_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            playlist_id INTEGER,
+            video_path TEXT,
+            video_title TEXT,
+            course_id INTEGER,
+            order_index INTEGER,
+            FOREIGN KEY (playlist_id) REFERENCES playlists (id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS user_achievements (
+            user_id INTEGER,
+            achievement_id TEXT,
+            unlocked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (user_id, achievement_id),
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS flashcards (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            course_id INTEGER,
+            video_path TEXT,
+            front TEXT NOT NULL,
+            back TEXT NOT NULL,
+            next_review_date TEXT, -- YYYY-MM-DD
+            interval INTEGER DEFAULT 1,
+            ease_factor REAL DEFAULT 2.5,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+        );
+    ''')
+
+    # Migrations
+    try:
+        conn.execute('SELECT item_type FROM videos LIMIT 1')
+    except sqlite3.OperationalError:
+        print("Migrating: Adding item_type to videos...")
+        conn.execute("ALTER TABLE videos ADD COLUMN item_type TEXT DEFAULT 'video'")
+
+    conn.commit()
+    conn.close()
+
+def natural_sort_key(s):
+    return [int(text) if text.isdigit() else text.lower()
+            for text in re.split('([0-9]+)', s)]
+
+def scan_courses():
+    if not os.path.exists(COURSES_DIR):
+        os.makedirs(COURSES_DIR)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    for folder_name in os.listdir(COURSES_DIR):
+        course_path = os.path.join(COURSES_DIR, folder_name)
+        if os.path.isdir(course_path):
+            cursor.execute('SELECT id FROM courses WHERE folder_name = ?', (folder_name,))
+            course = cursor.fetchone()
+            if not course:
+                cursor.execute('INSERT INTO courses (title, folder_name) VALUES (?, ?)', (folder_name, folder_name))
+                course_id = cursor.lastrowid
+                scan_course_content(cursor, course_id, course_path)
+    conn.commit()
+    conn.close()
+
+def scan_course_content(cursor, course_id, course_path):
+    cursor.execute('SELECT path, duration FROM videos JOIN modules ON videos.module_id = modules.id WHERE modules.course_id = ?', (course_id,))
+    existing_durations = {row['path']: row['duration'] for row in cursor.fetchall()}
+
+    cursor.execute('DELETE FROM modules WHERE course_id = ?', (course_id,))
+    for root, dirs, files in os.walk(course_path):
+        if root == course_path:
+            module_name = "General"
+        else:
+            module_name = os.path.basename(root)
+            
+        video_files = [f for f in files if f.lower().endswith(('.mp4', '.mkv', '.webm', '.mov'))]
+        video_files.sort(key=natural_sort_key)
+        
+        # Check for Quiz
+        quiz_file = None
+        if 'quiz.json' in files:
+            quiz_file = 'quiz.json'
+            
+        if video_files or quiz_file:
+            cursor.execute('INSERT INTO modules (course_id, title, order_index) VALUES (?, ?, ?)', (course_id, module_name, 0))
+            module_id = cursor.lastrowid
+            
+            # Insert Videos
+            for idx, vf in enumerate(video_files):
+                full_path = os.path.join(root, vf)
+                rel_file_path = os.path.relpath(full_path, COURSES_DIR)
+                
+                duration = existing_durations.get(rel_file_path, 0)
+                if duration == 0:
+                    try:
+                        tag = TinyTag.get(full_path)
+                        duration = tag.duration or 0
+                    except Exception as e:
+                        print(f"Error reading duration for {full_path}: {e}")
+                        duration = 0
+
+                cursor.execute('INSERT INTO videos (module_id, title, filename, path, order_index, duration, item_type) VALUES (?, ?, ?, ?, ?, ?, ?)', 
+                               (module_id, vf, vf, rel_file_path, idx, duration, 'video'))
+            
+            # Insert Quiz (at end of module)
+            if quiz_file:
+                full_path = os.path.join(root, quiz_file)
+                rel_file_path = os.path.relpath(full_path, COURSES_DIR)
+                # Order index = len(video_files)
+                cursor.execute('INSERT INTO videos (module_id, title, filename, path, order_index, duration, item_type) VALUES (?, ?, ?, ?, ?, ?, ?)', 
+                               (module_id, "📝 Quiz: " + module_name, quiz_file, rel_file_path, len(video_files), 0, 'quiz'))
+
+def get_current_user_id():
+    return current_user.id if current_user.is_authenticated else None
+
+def get_course_stats(conn, course_id, user_id):
+    stats = conn.execute('''
+        SELECT 
+            COUNT(v.id) as total_videos,
+            SUM(v.duration) as total_duration
+        FROM videos v 
+        JOIN modules m ON v.module_id = m.id 
+        WHERE m.course_id = ?
+    ''', (course_id,)).fetchone()
+    
+    total_videos = stats['total_videos']
+    total_duration = stats['total_duration'] or 0
+    
+    watched_count = 0
+    watched_time = 0
+    
+    if user_id:
+        w_stats = conn.execute('''
+            SELECT 
+                COUNT(DISTINCT vp.video_path) as count,
+                SUM(CASE WHEN vp.is_completed THEN v.duration ELSE vp.watched_time END) as time
+            FROM video_progress vp
+            JOIN videos v ON vp.video_path = v.path
+            JOIN modules m ON v.module_id = m.id
+            WHERE m.course_id = ? AND vp.user_id = ?
+        ''', (course_id, user_id)).fetchone()
+        
+        if w_stats and w_stats['count']:
+            watched_count = w_stats['count']
+            watched_time = w_stats['time'] or 0
+        
+        if watched_count == 0:
+             legacy = conn.execute('SELECT COUNT(*) as count FROM watched_videos WHERE course_id = ? AND user_id = ?', (course_id, user_id)).fetchone()
+             if legacy and legacy['count'] > 0:
+                 watched_count = legacy['count']
+    else:
+        legacy = conn.execute('SELECT COUNT(*) as count FROM watched_videos WHERE course_id = ? AND user_id IS NULL', (course_id,)).fetchone()
+        watched_count = legacy['count']
+        
+    if total_duration > 0:
+        percentage = int((watched_time / total_duration) * 100)
+        if percentage == 0 and watched_count > 0:
+             percentage = int((watched_count / total_videos) * 100)
+    elif total_videos > 0:
+        percentage = int((watched_count / total_videos) * 100)
+    else:
+        percentage = 0
+        
+    return {
+        'total_videos': total_videos,
+        'watched_count': watched_count,
+        'percentage': min(percentage, 100),
+        'total_duration': total_duration,
+        'watched_time': watched_time
+    }
+
+# --- Routes ---
+
+@app.route('/')
+def index():
+    scan_courses()
+    conn = get_db_connection()
+    user_id = get_current_user_id()
+    
+    continue_watching = []
+    if user_id:
+        cw_rows = conn.execute('''
+            SELECT v.title as video_title, v.path as video_path, v.duration,
+                   c.title as course_title, c.id as course_id,
+                   vp.watched_time, vp.updated_at
+            FROM video_progress vp
+            JOIN videos v ON vp.video_path = v.path
+            JOIN modules m ON v.module_id = m.id
+            JOIN courses c ON m.course_id = c.id
+            WHERE vp.user_id = ? AND vp.is_completed = 0 AND vp.watched_time > 0
+            ORDER BY vp.updated_at DESC
+            LIMIT 4
+        ''', (user_id,)).fetchall()
+        
+        for row in cw_rows:
+            item = dict(row)
+            pct = int((item['watched_time'] / item['duration'] * 100)) if item['duration'] > 0 else 0
+            item['percentage'] = pct
+            
+            course_folder_row = conn.execute('SELECT folder_name FROM courses WHERE id=?', (item['course_id'],)).fetchone()
+            if course_folder_row:
+                course_folder = os.path.join(COURSES_DIR, course_folder_row['folder_name'])
+                thumb_url = None
+                for ext in ['jpg', 'png', 'jpeg', 'webp']:
+                    if os.path.exists(os.path.join(course_folder, f"cover.{ext}")):
+                         thumb_url = f"/course_file/{item['course_id']}/cover.{ext}"
+                         break
+                    if os.path.exists(os.path.join(course_folder, f"banner.{ext}")):
+                         thumb_url = f"/course_file/{item['course_id']}/banner.{ext}"
+                         break
+                item['thumbnail'] = thumb_url
+            continue_watching.append(item)
+
+    if user_id:
+        query = '''
+            SELECT c.*, p.last_video_title, p.last_video_path 
+            FROM courses c 
+            LEFT JOIN course_progress p ON c.id = p.course_id AND p.user_id = ?
+            ORDER BY c.is_favorite DESC, c.title ASC
+        '''
+        params = (user_id,)
+    else:
+        query = '''
+            SELECT c.*, p.last_video_title, p.last_video_path 
+            FROM courses c 
+            LEFT JOIN course_progress p ON c.id = p.course_id AND p.user_id IS NULL
+            ORDER BY c.is_favorite DESC, c.title ASC
+        '''
+        params = ()
+
+    courses_rows = conn.execute(query, params).fetchall()
+    
+    courses_data = []
+    for row in courses_rows:
+        course = dict(row)
+        stats = get_course_stats(conn, course['id'], user_id)
+        course.update(stats)
+        
+        course_folder = os.path.join(COURSES_DIR, course['folder_name'])
+        thumb_url = None
+        for ext in ['jpg', 'png', 'jpeg', 'webp']:
+            if os.path.exists(os.path.join(course_folder, f"cover.{ext}")):
+                 thumb_url = f"/course_file/{course['id']}/cover.{ext}"
+                 break
+            if os.path.exists(os.path.join(course_folder, f"banner.{ext}")):
+                 thumb_url = f"/course_file/{course['id']}/banner.{ext}"
+                 break
+        
+        course['thumbnail'] = thumb_url
+        courses_data.append(course)
+        
+    conn.close()
+    return render_template('index.html', courses=courses_data, continue_watching=continue_watching)
+
+@app.route('/search')
+def search_page():
+    q = request.args.get('q', '').strip()
+    results = {'videos': [], 'notes': []}
+    
+    if q:
+        conn = get_db_connection()
+        user_id = get_current_user_id()
+        
+        v_rows = conn.execute('''
+            SELECT v.title, v.path, c.title as course_title, c.id as course_id 
+            FROM videos v
+            JOIN modules m ON v.module_id = m.id
+            JOIN courses c ON m.course_id = c.id
+            WHERE v.title LIKE ?
+            LIMIT 20
+        ''', (f'%{q}%',)).fetchall()
+        results['videos'] = [dict(r) for r in v_rows]
+        
+        if user_id:
+            n_rows = conn.execute('''
+                SELECT vn.content, vn.video_path, v.title as video_title, c.title as course_title, c.id as course_id
+                FROM video_notes vn
+                JOIN videos v ON vn.video_path = v.path
+                JOIN modules m ON v.module_id = m.id
+                JOIN courses c ON m.course_id = c.id
+                WHERE vn.user_id = ? AND vn.content LIKE ?
+                LIMIT 20
+            ''', (user_id, f'%{q}%')).fetchall()
+            results['notes'] = [dict(r) for r in n_rows]
+            
+        conn.close()
+        
+    return render_template('search.html', query=q, results=results)
+
+@app.route('/subtitle/<path:video_path>')
+def serve_subtitle(video_path):
+    full_path = os.path.join(COURSES_DIR, video_path)
+    base_path = os.path.splitext(full_path)[0]
+    
+    vtt_path = base_path + ".vtt"
+    srt_path = base_path + ".srt"
+    
+    if os.path.exists(vtt_path):
+        return send_file(vtt_path, mimetype='text/vtt')
+    elif os.path.exists(srt_path):
+        with open(srt_path, 'r', encoding='utf-8', errors='ignore') as f:
+            content = f.read()
+            vtt_content = srt_to_vtt(content)
+            return vtt_content, 200, {'Content-Type': 'text/vtt'}
+            
+    return "", 404
+
+@app.route('/api/transcript/<path:video_path>')
+def get_transcript(video_path):
+    full_path = os.path.join(COURSES_DIR, video_path)
+    base_path = os.path.splitext(full_path)[0]
+    
+    vtt_path = base_path + ".vtt"
+    srt_path = base_path + ".srt"
+    
+    content = ""
+    if os.path.exists(vtt_path):
+        with open(vtt_path, 'r', encoding='utf-8', errors='ignore') as f:
+            content = f.read()
+    elif os.path.exists(srt_path):
+        with open(srt_path, 'r', encoding='utf-8', errors='ignore') as f:
+            content = f.read()
+    
+    if content:
+        return jsonify(parse_subtitle_to_json(content))
+    return jsonify([])
+
+@app.route('/settings')
+def settings():
+    conn = get_db_connection()
+    user_id = get_current_user_id()
+    
+    courses_query = conn.execute('SELECT id, title, description, alternate_title FROM courses ORDER BY title').fetchall()
+    
+    courses_data = []
+    for c in courses_query:
+        stats = get_course_stats(conn, c['id'], user_id)
+        courses_data.append({
+            'id': c['id'],
+            'title': c['title'],
+            'description': c['description'],
+            'alternate_title': c['alternate_title'],
+            'total_videos': stats['total_videos'],
+            'watched_count': stats['watched_count'],
+            'percentage': stats['percentage']
+        })
+    conn.close()
+    return render_template('settings.html', courses=courses_data)
+
+@app.route('/course/<int:course_id>')
+def player(course_id):
+    conn = get_db_connection()
+    user_id = get_current_user_id()
+    
+    course = conn.execute('SELECT * FROM courses WHERE id = ?', (course_id,)).fetchone()
+    if not course:
+        abort(404)
+    modules = conn.execute('SELECT * FROM modules WHERE course_id = ? ORDER BY title', (course_id,)).fetchall()
+    structure = []
+    
+    course_root = os.path.join(COURSES_DIR, course['folder_name'])
+    
+    vp_map = {}
+    if user_id:
+        vp_rows = conn.execute('''
+            SELECT vp.video_path, vp.watched_time, vp.is_completed 
+            FROM video_progress vp 
+            JOIN videos v ON vp.video_path = v.path 
+            JOIN modules m ON v.module_id = m.id 
+            WHERE m.course_id = ? AND vp.user_id = ?
+        ''', (course_id, user_id)).fetchall()
+        for r in vp_rows:
+            vp_map[r['video_path']] = {'watched_time': r['watched_time'], 'is_completed': r['is_completed']}
+
+    for module in modules:
+        videos = conn.execute('SELECT * FROM videos WHERE module_id = ? ORDER BY order_index', (module['id'],)).fetchall()
+        mod_dict = dict(module)
+        mod_dict['videos'] = []
+        for v in videos:
+            v_dict = dict(v)
+            prog = vp_map.get(v['path'], {'watched_time': 0, 'is_completed': False})
+            v_dict['watched_time'] = prog['watched_time']
+            v_dict['is_completed'] = prog['is_completed']
+            mod_dict['videos'].append(v_dict)
+        
+        res_files = []
+        if module['title'] == "General":
+             mod_path = course_root
+        else:
+             mod_path = os.path.join(course_root, module['title'])
+             
+        if os.path.exists(mod_path):
+             for f in os.listdir(mod_path):
+                 if os.path.isfile(os.path.join(mod_path, f)):
+                     if not f.lower().endswith(('.mp4', '.mkv', '.webm', '.mov', '.ds_store')):
+                         rel = os.path.relpath(os.path.join(mod_path, f), COURSES_DIR)
+                         res_files.append({'name': f, 'path': rel})
+        
+        mod_dict['resources'] = res_files
+        structure.append(mod_dict)
+        
+    structure.sort(key=lambda x: natural_sort_key(x['title']))
+    
+    if user_id:
+        progress = conn.execute('SELECT * FROM course_progress WHERE course_id = ? AND user_id = ?', (course_id, user_id)).fetchone()
+        watched_rows = conn.execute('SELECT video_path FROM watched_videos WHERE course_id = ? AND user_id = ?', (course_id, user_id)).fetchall()
+    else:
+        progress = conn.execute('SELECT * FROM course_progress WHERE course_id = ? AND user_id IS NULL', (course_id,)).fetchone()
+        watched_rows = conn.execute('SELECT video_path FROM watched_videos WHERE course_id = ? AND user_id IS NULL', (course_id,)).fetchall()
+
+    last_played_path = progress['last_video_path'] if progress else None
+    last_timestamp = progress['last_video_timestamp'] if progress and progress['last_video_timestamp'] else 0
+    watched_paths = [row['video_path'] for row in watched_rows]
+    
+    total_videos = conn.execute('SELECT COUNT(*) as count FROM videos v JOIN modules m ON v.module_id = m.id WHERE m.course_id = ?', (course_id,)).fetchone()['count']
+    is_completed = (len(watched_paths) >= total_videos and total_videos > 0)
+    
+    conn.close()
+    return render_template('player.html', course=course, structure=structure, 
+                           last_played_path=last_played_path, 
+                           last_timestamp=last_timestamp,
+                           watched_paths=watched_paths, 
+                           is_completed=is_completed)
+
+@app.route('/media/<path:filename>')
+def serve_media(filename):
+    return send_from_directory(COURSES_DIR, filename)
+
+@app.route('/course_file/<int:course_id>/<path:filename>')
+def serve_course_file(course_id, filename):
+    conn = get_db_connection()
+    course = conn.execute('SELECT folder_name FROM courses WHERE id = ?', (course_id,)).fetchone()
+    conn.close()
+    if not course:
+        abort(404)
+    return send_from_directory(os.path.join(COURSES_DIR, course['folder_name']), filename)
+
+# --- Auth Routes ---
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+        
+        conn = get_db_connection()
+        user = conn.execute('SELECT * FROM users WHERE username = ?', (username,)).fetchone()
+        conn.close()
+        
+        if user and check_password_hash(user['password_hash'], password):
+            user_obj = User(user['id'], user['username'], user['name'], user['address'])
+            login_user(user_obj)
+            return redirect(url_for('index'))
+        else:
+            flash('Invalid username or password')
+            
+    return render_template('login.html')
+
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+        name = request.form['name']
+        address = request.form['address']
+        
+        conn = get_db_connection()
+        try:
+            hashed_pw = generate_password_hash(password)
+            conn.execute('INSERT INTO users (username, password_hash, name, address) VALUES (?, ?, ?, ?)',
+                         (username, hashed_pw, name, address))
+            conn.commit()
+            conn.close()
+            flash('Registration successful! Please login.')
+            return redirect(url_for('login'))
+        except sqlite3.IntegrityError:
+            conn.close()
+            flash('Username already exists.')
+            
+    return render_template('register.html')
+
+@app.route('/logout')
+@login_required
+def logout():
+    logout_user()
+    return redirect(url_for('index'))
+
+# --- API Routes ---
+
+@app.route('/api/save_progress', methods=['POST'])
+def save_progress():
+    data = request.json
+    user_id = get_current_user_id()
+    
+    timestamp = data.get('timestamp', 0)
+    video_path = data['video_path']
+    course_id = data['course_id']
+    
+    conn = get_db_connection()
+    
+    conn.execute('''
+        INSERT INTO course_progress (user_id, course_id, last_video_path, last_video_title, last_video_timestamp, updated_at)
+        VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(user_id, course_id) DO UPDATE SET
+            last_video_path = excluded.last_video_path,
+            last_video_title = excluded.last_video_title,
+            last_video_timestamp = excluded.last_video_timestamp,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE (user_id IS ? OR (user_id IS NULL AND ? IS NULL))
+    ''', (user_id, course_id, video_path, data['video_title'], timestamp, user_id, user_id))
+    
+    video_row = conn.execute('SELECT duration FROM videos WHERE path = ? LIMIT 1', (video_path,)).fetchone()
+    duration = video_row['duration'] if video_row else 0
+    
+    is_completed = False
+    if duration > 0 and (timestamp / duration) >= 0.90:
+        is_completed = True
+        
+    was_completed = False
+    prev_prog = conn.execute('SELECT is_completed FROM video_progress WHERE user_id=? AND video_path=?', (user_id, video_path)).fetchone()
+    if prev_prog and prev_prog['is_completed']:
+        was_completed = True
+
+    conn.execute('''
+        INSERT INTO video_progress (user_id, video_path, watched_time, is_completed, updated_at)
+        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(user_id, video_path) DO UPDATE SET
+            watched_time = MAX(video_progress.watched_time, excluded.watched_time),
+            is_completed = (excluded.is_completed OR video_progress.is_completed),
+            updated_at = CURRENT_TIMESTAMP
+    ''', (user_id, video_path, timestamp, is_completed))
+    
+    today = datetime.date.today().strftime("%Y-%m-%d")
+    completed_inc = 1 if (is_completed and not was_completed) else 0
+    seconds_inc = 5 
+    
+    conn.execute('''
+        INSERT INTO daily_activity (user_id, date, seconds_watched, videos_completed)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(user_id, date) DO UPDATE SET
+            seconds_watched = seconds_watched + excluded.seconds_watched,
+            videos_completed = videos_completed + excluded.videos_completed
+    ''', (user_id, today, seconds_inc, completed_inc))
+    
+    if is_completed:
+        conn.execute('''
+            INSERT OR IGNORE INTO watched_videos (user_id, course_id, video_path) 
+            VALUES (?, ?, ?)
+        ''', (user_id, course_id, video_path))
+    
+    # Check Achievements
+    new_badges = check_new_achievements(conn, user_id)
+
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "success", "is_completed": is_completed, "new_achievements": new_badges})
+
+@app.route('/api/get_note', methods=['GET'])
+def get_note():
+    user_id = get_current_user_id()
+    video_path = request.args.get('video_path')
+    
+    if not user_id:
+         return jsonify({"content": ""})
+
+    conn = get_db_connection()
+    row = conn.execute('SELECT content FROM video_notes WHERE user_id = ? AND video_path = ?', (user_id, video_path)).fetchone()
+    conn.close()
+    
+    return jsonify({"content": row['content'] if row else ""})
+
+@app.route('/api/save_note', methods=['POST'])
+def save_note():
+    data = request.json
+    user_id = get_current_user_id()
+    if not user_id:
+        return jsonify({"status": "error", "message": "Login required"}), 401
+        
+    conn = get_db_connection()
+    conn.execute('''
+        INSERT INTO video_notes (user_id, video_path, content, updated_at)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(user_id, video_path) DO UPDATE SET
+            content = excluded.content,
+            updated_at = CURRENT_TIMESTAMP
+    ''', (user_id, data['video_path'], data['content']))
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "success"})
+
+@app.route('/api/save_bookmark', methods=['POST'])
+@login_required
+def save_bookmark():
+    data = request.json
+    user_id = current_user.id
+    conn = get_db_connection()
+    conn.execute('''
+        INSERT INTO bookmarks (user_id, course_id, video_path, video_title, timestamp, note)
+        VALUES (?, ?, ?, ?, ?, ?)
+    ''', (user_id, data['course_id'], data['video_path'], data['video_title'], data['timestamp'], data.get('note', '')))
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "success"})
+
+@app.route('/api/get_bookmarks', methods=['GET'])
+@login_required
+def get_bookmarks():
+    course_id = request.args.get('course_id')
+    user_id = current_user.id
+    conn = get_db_connection()
+    
+    if course_id:
+        rows = conn.execute('SELECT * FROM bookmarks WHERE user_id = ? AND course_id = ? ORDER BY timestamp', (user_id, course_id)).fetchall()
+    else:
+        rows = conn.execute('SELECT * FROM bookmarks WHERE user_id = ? ORDER BY created_at DESC', (user_id,)).fetchall()
+    
+    conn.close()
+    return jsonify([dict(r) for r in rows])
+
+@app.route('/api/delete_bookmark', methods=['POST'])
+@login_required
+def delete_bookmark():
+    bookmark_id = request.json['id']
+    user_id = current_user.id
+    conn = get_db_connection()
+    conn.execute('DELETE FROM bookmarks WHERE id = ? AND user_id = ?', (bookmark_id, user_id))
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "success"})
+
+@app.route('/resources')
+@login_required
+def resources_page():
+    resources = []
+    for root, dirs, files in os.walk(COURSES_DIR):
+        for f in files:
+            if not f.lower().endswith(('.mp4', '.mkv', '.webm', '.mov', '.ds_store', '.db', '.py', '.sh', '.vtt', '.srt')):
+                full_path = os.path.join(root, f)
+                rel_path = os.path.relpath(full_path, COURSES_DIR)
+                parts = rel_path.split(os.sep)
+                course_name = parts[0] if len(parts) > 0 else "Unknown"
+                
+                conn = get_db_connection()
+                course = conn.execute('SELECT id FROM courses WHERE folder_name = ?', (course_name,)).fetchone()
+                conn.close()
+                
+                if course:
+                    resources.append({
+                        'name': f,
+                        'path': rel_path,
+                        'course_name': course_name,
+                        'course_id': course['id'],
+                        'size': os.path.getsize(full_path)
+                    })
+    return render_template('resources.html', resources=resources)
+
+@app.route('/analytics')
+@login_required
+def analytics_page():
+    user_id = current_user.id
+    conn = get_db_connection()
+    
+    total_time = conn.execute('SELECT SUM(seconds_watched) as t FROM daily_activity WHERE user_id=?', (user_id,)).fetchone()['t'] or 0
+    total_completed = conn.execute('SELECT SUM(videos_completed) as c FROM daily_activity WHERE user_id=?', (user_id,)).fetchone()['c'] or 0
+    
+    activity_rows = conn.execute('SELECT date, seconds_watched, videos_completed FROM daily_activity WHERE user_id=?', (user_id,)).fetchall()
+    activity_data = {row['date']: {'seconds': row['seconds_watched'], 'count': row['videos_completed']} for row in activity_rows}
+    
+    streak = 0
+    check_date = datetime.date.today()
+    while True:
+        date_str = check_date.strftime("%Y-%m-%d")
+        if date_str in activity_data and activity_data[date_str]['seconds'] > 0:
+            streak += 1
+            check_date -= datetime.timedelta(days=1)
+        else:
+            if date_str == datetime.date.today().strftime("%Y-%m-%d") and streak == 0:
+                 check_date -= datetime.timedelta(days=1)
+                 continue
+            break
+            
+    # Achievements Data
+    user_achievements = {row['achievement_id']: row['unlocked_at'] for row in conn.execute('SELECT * FROM user_achievements WHERE user_id=?', (user_id,)).fetchall()}
+    
+    achievements_list = []
+    for aid, data in ACHIEVEMENTS.items():
+        item = data.copy()
+        item['id'] = aid
+        item['unlocked'] = aid in user_achievements
+        item['unlocked_at'] = user_achievements.get(aid)
+        achievements_list.append(item)
+        
+    conn.close()
+    return render_template('analytics.html', 
+                           total_time=total_time, 
+                           total_completed=total_completed, 
+                           activity_data=activity_data, 
+                           streak=streak,
+                           achievements=achievements_list)
+
+# --- Playlist Routes ---
+
+@app.route('/api/create_playlist', methods=['POST'])
+@login_required
+def create_playlist():
+    title = request.json.get('title')
+    user_id = current_user.id
+    if not title:
+        return jsonify({"status": "error", "message": "Title required"}), 400
+    
+    conn = get_db_connection()
+    conn.execute('INSERT INTO playlists (user_id, title) VALUES (?, ?)', (user_id, title))
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "success"})
+
+@app.route('/api/get_playlists', methods=['GET'])
+@login_required
+def get_playlists():
+    user_id = current_user.id
+    conn = get_db_connection()
+    rows = conn.execute('SELECT * FROM playlists WHERE user_id = ? ORDER BY created_at DESC', (user_id,)).fetchall()
+    playlists = [dict(r) for r in rows]
+    
+    # Enrich with item count
+    for pl in playlists:
+        count = conn.execute('SELECT COUNT(*) as c FROM playlist_items WHERE playlist_id = ?', (pl['id'],)).fetchone()['c']
+        pl['item_count'] = count
+        
+    conn.close()
+    return jsonify(playlists)
+
+@app.route('/api/add_to_playlist', methods=['POST'])
+@login_required
+def add_to_playlist():
+    data = request.json
+    playlist_id = data.get('playlist_id')
+    video_path = data.get('video_path')
+    video_title = data.get('video_title')
+    course_id = data.get('course_id')
+    
+    conn = get_db_connection()
+    # Get current max order
+    max_order = conn.execute('SELECT MAX(order_index) as m FROM playlist_items WHERE playlist_id = ?', (playlist_id,)).fetchone()['m']
+    new_order = (max_order if max_order is not None else -1) + 1
+    
+    conn.execute('''
+        INSERT INTO playlist_items (playlist_id, video_path, video_title, course_id, order_index)
+        VALUES (?, ?, ?, ?, ?)
+    ''', (playlist_id, video_path, video_title, course_id, new_order))
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "success"})
+
+@app.route('/api/remove_from_playlist', methods=['POST'])
+@login_required
+def remove_from_playlist():
+    item_id = request.json.get('item_id')
+    conn = get_db_connection()
+    conn.execute('DELETE FROM playlist_items WHERE id = ?', (item_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "success"})
+
+@app.route('/playlist/<int:playlist_id>')
+@login_required
+def playlist_player(playlist_id):
+    conn = get_db_connection()
+    user_id = current_user.id
+    
+    playlist = conn.execute('SELECT * FROM playlists WHERE id = ? AND user_id = ?', (playlist_id, user_id)).fetchone()
+    if not playlist:
+        abort(404)
+        
+    items = conn.execute('SELECT * FROM playlist_items WHERE playlist_id = ? ORDER BY order_index', (playlist_id,)).fetchall()
+    
+    # Transform items to match player structure (simple flat list masquerading as module)
+    video_list = []
+    for item in items:
+        # Get duration and progress
+        v_info = conn.execute('SELECT duration, item_type FROM videos WHERE path = ?', (item['video_path'],)).fetchone()
+        duration = v_info['duration'] if v_info else 0
+        item_type = v_info['item_type'] if v_info and 'item_type' in v_info.keys() else 'video'
+        
+        prog = conn.execute('SELECT watched_time, is_completed FROM video_progress WHERE user_id = ? AND video_path = ?', (user_id, item['video_path'])).fetchone()
+        
+        video_list.append({
+            'title': item['video_title'],
+            'path': item['video_path'],
+            'duration': duration,
+            'item_type': item_type,
+            'watched_time': prog['watched_time'] if prog else 0,
+            'is_completed': prog['is_completed'] if prog else False,
+            'course_id': item['course_id'] # Needed for linking back
+        })
+        
+    structure = [{'title': playlist['title'], 'videos': video_list, 'resources': []}]
+    
+    conn.close()
+    
+    # Reuse player template with slight adjustment (we might need a flag `is_playlist`)
+    return render_template('player.html', course={'title': playlist['title'], 'id': 0}, structure=structure, 
+                           last_played_path=None, last_timestamp=0, watched_paths=[], is_completed=False, is_playlist=True)
+
+# --- Backup/Restore Routes ---
+
+@app.route('/api/backup')
+@login_required
+def backup_data():
+    user_id = current_user.id
+    conn = get_db_connection()
+    
+    data = {
+        'version': 1,
+        'user': dict(conn.execute('SELECT * FROM users WHERE id=?', (user_id,)).fetchone()),
+        'progress': [dict(r) for r in conn.execute('SELECT * FROM video_progress WHERE user_id=?', (user_id,)).fetchall()],
+        'course_progress': [dict(r) for r in conn.execute('SELECT * FROM course_progress WHERE user_id=?', (user_id,)).fetchall()],
+        'notes': [dict(r) for r in conn.execute('SELECT * FROM video_notes WHERE user_id=?', (user_id,)).fetchall()],
+        'bookmarks': [dict(r) for r in conn.execute('SELECT * FROM bookmarks WHERE user_id=?', (user_id,)).fetchall()],
+        'playlists': [dict(r) for r in conn.execute('SELECT * FROM playlists WHERE user_id=?', (user_id,)).fetchall()],
+        'playlist_items': [dict(r) for r in conn.execute('SELECT pi.* FROM playlist_items pi JOIN playlists p ON pi.playlist_id = p.id WHERE p.user_id=?', (user_id,)).fetchall()],
+        'activity': [dict(r) for r in conn.execute('SELECT * FROM daily_activity WHERE user_id=?', (user_id,)).fetchall()]
+    }
+    
+    conn.close()
+    
+    return jsonify(data)
+
+@app.route('/api/restore', methods=['POST'])
+@login_required
+def restore_data():
+    if 'file' not in request.files:
+        return jsonify({"status": "error", "message": "No file part"}), 400
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({"status": "error", "message": "No selected file"}), 400
+        
+    try:
+        data = json.load(file)
+        user_id = current_user.id
+        conn = get_db_connection()
+        
+        # Restore Progress
+        for p in data.get('progress', []):
+            conn.execute('''
+                INSERT INTO video_progress (user_id, video_path, watched_time, is_completed, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(user_id, video_path) DO UPDATE SET
+                    watched_time = excluded.watched_time,
+                    is_completed = excluded.is_completed,
+                    updated_at = excluded.updated_at
+            ''', (user_id, p['video_path'], p['watched_time'], p['is_completed'], p['updated_at']))
+            
+        # Restore Notes
+        for n in data.get('notes', []):
+            conn.execute('''
+                INSERT INTO video_notes (user_id, video_path, content, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(user_id, video_path) DO UPDATE SET
+                    content = excluded.content,
+                    updated_at = excluded.updated_at
+            ''', (user_id, n['video_path'], n['content'], n['created_at'], n['updated_at']))
+            
+        # Restore Bookmarks
+        for b in data.get('bookmarks', []):
+            conn.execute('''
+                INSERT INTO bookmarks (user_id, course_id, video_path, video_title, timestamp, note, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (user_id, b['course_id'], b['video_path'], b['video_title'], b['timestamp'], b['note'], b['created_at']))
+            
+        # Restore Activity
+        for a in data.get('activity', []):
+            conn.execute('''
+                INSERT INTO daily_activity (user_id, date, seconds_watched, videos_completed)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(user_id, date) DO UPDATE SET
+                    seconds_watched = MAX(daily_activity.seconds_watched, excluded.seconds_watched),
+                    videos_completed = MAX(daily_activity.videos_completed, excluded.videos_completed)
+            ''', (user_id, a['date'], a['seconds_watched'], a['videos_completed']))
+
+        conn.commit()
+        conn.close()
+        return jsonify({"status": "success", "message": "Restore complete (partial/merge)"})
+        
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+# --- Flashcard Routes ---
+
+@app.route('/api/add_flashcard', methods=['POST'])
+@login_required
+def add_flashcard():
+    data = request.json
+    user_id = current_user.id
+    today = datetime.date.today().strftime("%Y-%m-%d")
+    
+    conn = get_db_connection()
+    conn.execute('''
+        INSERT INTO flashcards (user_id, course_id, video_path, front, back, next_review_date)
+        VALUES (?, ?, ?, ?, ?, ?)
+    ''', (user_id, data['course_id'], data['video_path'], data['front'], data['back'], today))
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "success"})
+        
+@app.route('/api/review_flashcard', methods=['POST'])
+@login_required
+def review_flashcard():
+    # SM-2 inspired simplified algorithm
+    card_id = request.json.get('id')
+    quality = request.json.get('quality') # 0=forgot, 3=hard, 4=good, 5=easy
+    
+    conn = get_db_connection()
+    card = conn.execute('SELECT * FROM flashcards WHERE id = ?', (card_id,)).fetchone()
+    
+    if not card:
+        conn.close()
+        return jsonify({"status": "error"}), 404
+        
+    interval = card['interval']
+    ease = card['ease_factor']
+    
+    if quality < 3:
+        interval = 1
+    else:
+        if interval == 1:
+            interval = 6 if quality > 3 else 3
+        else:
+            interval = int(interval * ease)
+            
+        ease = ease + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02))
+        if ease < 1.3: ease = 1.3
+        
+    next_date = (datetime.date.today() + datetime.timedelta(days=interval)).strftime("%Y-%m-%d")
+    
+    conn.execute('''
+        UPDATE flashcards 
+        SET next_review_date = ?, interval = ?, ease_factor = ? 
+        WHERE id = ?
+    ''', (next_date, interval, ease, card_id))
+    conn.commit()
+    conn.close()
+    
+    return jsonify({"status": "success"})
+
+@app.route('/study')
+@login_required
+def study_page():
+    user_id = current_user.id
+    today = datetime.date.today().strftime("%Y-%m-%d")
+    
+    conn = get_db_connection()
+    # Get due cards
+    cards = conn.execute('''
+        SELECT * FROM flashcards 
+        WHERE user_id = ? AND next_review_date <= ? 
+        ORDER BY next_review_date
+    ''', (user_id, today)).fetchall()
+    
+    due_count = len(cards)
+    cards_list = [dict(c) for c in cards]
+    conn.close()
+    
+    return render_template('study.html', cards=cards_list, due_count=due_count)
+
+@app.route('/quiz/<path:quiz_file>')
+@login_required
+def serve_quiz(quiz_file):
+    # Securely serve quiz.json
+    full_path = os.path.join(COURSES_DIR, quiz_file)
+    if os.path.exists(full_path) and quiz_file.endswith('.json'):
+        return send_file(full_path)
+    abort(404)
+
+@app.route('/api/toggle_favorite', methods=['POST'])
+def toggle_favorite():
+    conn = get_db_connection()
+    conn.execute('UPDATE courses SET is_favorite = NOT is_favorite WHERE id = ?', (request.json['course_id'],))
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "success"})
+
+@app.route('/api/get_course_videos/<int:course_id>')
+@login_required
+def get_course_videos_api(course_id):
+    conn = get_db_connection()
+    user_id = current_user.id
+    
+    modules = conn.execute('SELECT * FROM modules WHERE course_id = ? ORDER BY order_index', (course_id,)).fetchall()
+    
+    vp_map = {}
+    vp_rows = conn.execute('SELECT video_path, watched_time, is_completed FROM video_progress WHERE user_id = ?', (user_id,)).fetchall()
+    for r in vp_rows:
+        vp_map[r['video_path']] = {'watched_time': r['watched_time'], 'is_completed': r['is_completed']}
+        
+    structure = []
+    for module in modules:
+        videos = conn.execute('SELECT * FROM videos WHERE module_id = ? ORDER BY order_index', (module['id'],)).fetchall()
+        mod_dict = dict(module)
+        mod_dict['videos'] = []
+        for v in videos:
+            v_dict = dict(v)
+            prog = vp_map.get(v['path'], {'watched_time': 0, 'is_completed': False})
+            v_dict['watched_time'] = prog['watched_time']
+            v_dict['is_completed'] = prog['is_completed']
+            mod_dict['videos'].append(v_dict)
+        structure.append(mod_dict)
+        
+    conn.close()
+    return jsonify({"structure": structure})
+
+@app.route('/api/reset_progress', methods=['POST'])
+def reset_progress():
+    data = request.json
+    course_id = data.get('course_id')
+    video_path = data.get('video_path')
+    user_id = get_current_user_id()
+    conn = get_db_connection()
+    
+    if course_id == 'all':
+        if user_id:
+            conn.execute('DELETE FROM course_progress WHERE user_id = ?', (user_id,))
+            conn.execute('DELETE FROM watched_videos WHERE user_id = ?', (user_id,))
+            conn.execute('DELETE FROM video_progress WHERE user_id = ?', (user_id,))
+        else:
+            conn.execute('DELETE FROM course_progress WHERE user_id IS NULL')
+            conn.execute('DELETE FROM watched_videos WHERE user_id IS NULL')
+            conn.execute('DELETE FROM video_progress WHERE user_id IS NULL')
+            
+    elif video_path:
+        if user_id:
+            conn.execute('DELETE FROM video_progress WHERE user_id = ? AND video_path = ?', (user_id, video_path))
+            conn.execute('DELETE FROM watched_videos WHERE user_id = ? AND video_path = ?', (user_id, video_path))
+    
+    elif course_id:
+        if user_id:
+            conn.execute('DELETE FROM course_progress WHERE course_id = ? AND user_id = ?', (course_id, user_id))
+            conn.execute('''
+                DELETE FROM video_progress 
+                WHERE user_id = ? AND video_path IN (
+                    SELECT v.path FROM videos v 
+                    JOIN modules m ON v.module_id = m.id 
+                    WHERE m.course_id = ?
+                )
+            ''', (user_id, course_id))
+            conn.execute('DELETE FROM watched_videos WHERE course_id = ? AND user_id = ?', (course_id, user_id))
+        else:
+            conn.execute('DELETE FROM course_progress WHERE course_id = ? AND user_id IS NULL', (course_id,))
+            conn.execute('DELETE FROM watched_videos WHERE course_id = ? AND user_id IS NULL', (course_id,))
+
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "success"})
+
+@app.route('/api/update_course_description', methods=['POST'])
+def update_course_description():
+    data = request.json
+    course_id = data.get('course_id')
+    description = data.get('description')
+    alternate_title = data.get('alternate_title')
+    
+    if not course_id:
+        return jsonify({"status": "error", "message": "Missing id"}), 400
+    conn = get_db_connection()
+    conn.execute('UPDATE courses SET description = ?, alternate_title = ? WHERE id = ?', (description, alternate_title, course_id))
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "success"})
+
+@app.route('/certificate/<int:course_id>')
+@login_required
+def download_certificate(course_id):
+    conn = get_db_connection()
+    user_id = current_user.id
+    
+    course = conn.execute('SELECT * FROM courses WHERE id = ?', (course_id,)).fetchone()
+    if not course:
+        abort(404)
+        
+    stats = get_course_stats(conn, course_id, user_id)
+    total_videos = stats['total_videos']
+    watched_count = stats['watched_count']
+    total_duration = stats['total_duration']
+    
+    conn.close()
+    
+    if watched_count < total_videos and total_videos > 0:
+        if request.args.get('preview') != 'true':
+            flash("You must complete the course to download the certificate.")
+            return redirect(url_for('player', course_id=course_id))
+
+    buffer = io.BytesIO()
+    p = canvas.Canvas(buffer, pagesize=landscape(A4))
+    width, height = landscape(A4)
+    
+    p.setStrokeColor(colors.HexColor("#5022c3"))
+    p.setLineWidth(5)
+    p.rect(30, 30, width-60, height-60)
+    p.setLineWidth(1)
+    p.setStrokeColor(colors.black)
+    p.rect(40, 40, width-80, height-80)
+    
+    p.setFont("Helvetica-Bold", 40)
+    p.drawCentredString(width / 2, height - 120, "CERTIFICATE OF COMPLETION")
+    
+    p.setFont("Helvetica", 16)
+    p.drawCentredString(width / 2, height - 160, "This is to certify that")
+    
+    p.setFont("Helvetica-BoldOblique", 32)
+    p.setFillColor(colors.HexColor("#5022c3"))
+    p.drawCentredString(width / 2, height - 210, current_user.name)
+    p.setFillColor(colors.black)
+    
+    p.setFont("Helvetica", 16)
+    p.drawCentredString(width / 2, height - 250, "has successfully completed the course")
+    
+    p.setFont("Helvetica-Bold", 28)
+    alt_title = course['alternate_title']
+    title_text = alt_title if alt_title else course['title']
+    p.drawCentredString(width / 2, height - 290, title_text)
+
+    if total_duration > 0:
+        hours = int(total_duration // 3600)
+        minutes = int((total_duration % 3600) // 60)
+        duration_text = f"Duration: {hours}h {minutes}m"
+        p.setFont("Helvetica", 14)
+        p.setFillColor(colors.grey)
+        p.drawCentredString(width / 2, height - 315, duration_text)
+        p.setFillColor(colors.black)
+    
+    desc_text = course['description'] if course['description'] else "This course covers advanced topics and practical skills."
+    desc_clean = re.sub('<[^<]+?>', '', desc_text)
+    
+    styles = getSampleStyleSheet()
+    styleN = ParagraphStyle(
+        'Normal',
+        parent=styles['Normal'],
+        fontSize=12,
+        alignment=TA_CENTER,
+        leading=16
+    )
+    
+    frame = Frame(100, height - 420, width - 200, 100, showBoundary=0)
+    story = [Paragraph(desc_clean[:300] + ("..." if len(desc_clean) > 300 else ""), styleN)]
+    frame.addFromList(story, p)
+    
+    today = datetime.date.today().strftime("%d %B %Y")
+    cert_id = str(uuid.uuid4()).split('-')[0].upper()
+    
+    p.setFont("Helvetica", 12)
+    p.drawString(100, 100, f"Date of Completion: {today}")
+    p.drawString(100, 80, f"Issued by: SkillForge - Organize. Learn. Master.")
+    
+    p.drawString(width - 300, 100, f"Certificate ID: {cert_id}")
+    p.drawString(width - 300, 80, "Signature: _______________________")
+    
+    try:
+        p.drawImage("static/images/logo.png", width/2 - 40, 105, width=80, preserveAspectRatio=True, mask='auto')
+    except:
+        pass
+
+    p.showPage()
+    p.save()
+    
+    buffer.seek(0)
+    return send_file(buffer, as_attachment=True, download_name=f"Certificate_{course['title'][:20]}.pdf", mimetype='application/pdf')
+
+if __name__ == '__main__':
+    init_db()
+    app.run(host='0.0.0.0', port=5001, debug=True)
