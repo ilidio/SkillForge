@@ -20,7 +20,8 @@ app = Flask(__name__)
 app.secret_key = 'skillforge_secret_key_change_this_in_production'  # Required for sessions
 
 # --- Configuration ---
-DB_FILE = "courses.db"
+basedir = os.path.abspath(os.path.dirname(__file__))
+DB_FILE = os.path.join(basedir, "courses.db")
 COURSES_DIR = "courses"
 
 # --- Login Manager Setup ---
