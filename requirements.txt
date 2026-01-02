@@ -2,3 +2,6 @@ Flask
 Flask-Login
 reportlab
 tinytag
+google-genai
+requests
+faster-whisper

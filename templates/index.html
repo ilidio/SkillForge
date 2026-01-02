@@ -244,6 +244,24 @@
             padding-top: 8px;
         }
         
+        /* Position Badge for Continue Watching */
+        .cw-position {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.6);
+            color: white;
+            padding: 8px 12px;
+            border-radius: 8px;
+            font-size: 1.2em;
+            font-weight: bold;
+            pointer-events: none;
+            z-index: 5;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            backdrop-filter: blur(4px);
+        }
+        
         /* Favorite Button */
         .fav-btn {
             position: absolute;
@@ -273,6 +291,27 @@
             padding: 40px;
             color: var(--text-secondary);
             font-size: 1.1em;
+        }
+    </style>
+    <!-- SweetAlert2 -->
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <style>
+        /* SweetAlert2 Theme Overrides */
+        .swal2-popup {
+            background-color: var(--bg-card) !important;
+            color: var(--text-main) !important;
+            border: 1px solid var(--border-color);
+        }
+        .swal2-title, .swal2-content, .swal2-html-container {
+            color: var(--text-main) !important;
+        }
+        .swal2-input {
+            background-color: var(--bg-body) !important;
+            color: var(--text-main) !important;
+            border: 1px solid var(--border-color) !important;
+        }
+        .swal2-confirm {
+            background-color: var(--primary-color) !important;
         }
     </style>
 </head>
@@ -323,11 +362,14 @@
                 {% for item in continue_watching %}
                 <div class="course-card-wrapper">
                     <a href="/course/{{ item.course_id }}" class="course-card">
-                         {% if item.thumbnail %}
-                        <img src="{{ item.thumbnail }}" class="course-thumbnail" alt="{{ item.course_title }}">
-                        {% else %}
-                        <div class="course-thumbnail" style="display: flex; align-items: center; justify-content: center; color: var(--text-secondary); font-size: 2em;">▶</div>
-                        {% endif %}
+                        <div style="position: relative;">
+                            {% if item.thumbnail %}
+                            <img src="{{ item.thumbnail }}" class="course-thumbnail" alt="{{ item.course_title }}">
+                            {% else %}
+                            <div class="course-thumbnail" style="display: flex; align-items: center; justify-content: center; color: var(--text-secondary); font-size: 2em;">▶</div>
+                            {% endif %}
+                            <div class="cw-position">#{{ item.order_index + 1 }}</div>
+                        </div>
                         <div class="course-content">
                              <div class="course-meta" style="color: var(--primary-color); font-weight: bold; margin-bottom: 5px;">{{ item.course_title }}</div>
                             <div class="course-title" style="font-size: 1em;">{{ item.video_title }}</div>
@@ -347,7 +389,9 @@
                 {% endfor %}
             </div>
         </div>
-        <br>
+        
+        <hr style="border: 0; border-top: 1px solid var(--border-color); margin: 40px 0;">
+        <h2 style="margin-bottom: 20px;">All Courses</h2>
         {% endif %}
 
         <div class="course-grid" id="courseGrid">
@@ -440,14 +484,22 @@
         }
         
         function createPlaylist() {
-            const title = prompt("Enter playlist name:");
-            if (title) {
-                fetch('/api/create_playlist', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ title: title })
-                }).then(() => loadPlaylists());
-            }
+            Swal.fire({
+                title: 'New Playlist',
+                input: 'text',
+                inputPlaceholder: 'Enter playlist name...',
+                showCancelButton: true,
+                confirmButtonText: 'Create',
+                confirmButtonColor: 'var(--primary-color)',
+            }).then((result) => {
+                if (result.isConfirmed && result.value) {
+                    fetch('/api/create_playlist', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ title: result.value })
+                    }).then(() => loadPlaylists());
+                }
+            });
         }
         
         document.addEventListener('DOMContentLoaded', loadPlaylists);

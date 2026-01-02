@@ -8,6 +8,10 @@ import uuid
 import datetime
 import io
 import json
+import requests
+import subprocess
+import shutil
+import time
 from reportlab.lib.pagesizes import landscape, A4
 from reportlab.pdfgen import canvas
 from reportlab.lib import colors
@@ -15,6 +19,12 @@ from reportlab.platypus import Paragraph, Frame
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER
 from tinytag import TinyTag
+
+# AI Import
+try:
+    from google import genai
+except ImportError:
+    genai = None
 
 app = Flask(__name__)
 app.secret_key = 'skillforge_secret_key_change_this_in_production'  # Required for sessions
@@ -399,6 +409,44 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
         );
+
+        CREATE TABLE IF NOT EXISTS user_settings (
+            user_id INTEGER,
+            key TEXT NOT NULL,
+            value TEXT,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (user_id, key),
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS ai_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            provider TEXT,
+            model TEXT,
+            action TEXT,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS quiz_stats (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            course_id INTEGER,
+            correct_answers INTEGER,
+            total_questions INTEGER,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS video_mastery (
+            user_id INTEGER,
+            video_path TEXT NOT NULL,
+            score INTEGER DEFAULT 0,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (user_id, video_path),
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+        );
     ''')
 
     # Migrations
@@ -550,7 +598,7 @@ def index():
     continue_watching = []
     if user_id:
         cw_rows = conn.execute('''
-            SELECT v.title as video_title, v.path as video_path, v.duration,
+            SELECT v.title as video_title, v.path as video_path, v.duration, v.order_index,
                    c.title as course_title, c.id as course_id,
                    vp.watched_time, vp.updated_at
             FROM video_progress vp
@@ -625,7 +673,7 @@ def index():
 @app.route('/search')
 def search_page():
     q = request.args.get('q', '').strip()
-    results = {'videos': [], 'notes': []}
+    results = {'videos': [], 'notes': [], 'transcripts': []}
     
     if q:
         conn = get_db_connection()
@@ -653,9 +701,72 @@ def search_page():
             ''', (user_id, f'%{q}%')).fetchall()
             results['notes'] = [dict(r) for r in n_rows]
             
+        # Global Transcript Search
+        results['transcripts'] = search_all_transcripts(q, conn)
         conn.close()
         
     return render_template('search.html', query=q, results=results)
+
+def search_all_transcripts(query, conn):
+    matches = []
+    query_lower = query.lower()
+    
+    # We'll use the DB to find all videos, then check their subtitle files
+    videos = conn.execute('''
+        SELECT v.path, v.title as video_title, c.title as course_title, c.id as course_id 
+        FROM videos v
+        JOIN modules m ON v.module_id = m.id
+        JOIN courses c ON m.course_id = c.id
+    ''').fetchall()
+    
+    for v in videos:
+        full_path = os.path.join(COURSES_DIR, v['path'])
+        base_path = os.path.splitext(full_path)[0]
+        
+        sub_file = None
+        for ext in ['.vtt', '.srt']:
+            if os.path.exists(base_path + ext):
+                sub_file = base_path + ext
+                break
+        
+        if sub_file:
+            try:
+                with open(sub_file, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                    if query_lower in content.lower():
+                        # Find specific timestamps
+                        # This is a bit heavy, but works for personal collections
+                        blocks = content.strip().split('\n\n')
+                        for block in blocks:
+                            if query_lower in block.lower():
+                                lines = block.split('\n')
+                                if len(lines) >= 2:
+                                    ts_line = lines[1] if lines[0].isdigit() else lines[0]
+                                    if '-->' in ts_line:
+                                        time_str = ts_line.split('-->')[0].strip().replace(',', '.')
+                                        # Convert to seconds for jumping
+                                        parts = time_str.split(':')
+                                        seconds = 0
+                                        if len(parts) == 3: # HH:MM:SS.mmm
+                                            seconds = int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
+                                        elif len(parts) == 2: # MM:SS.mmm
+                                            seconds = int(parts[0]) * 60 + float(parts[1])
+                                        
+                                        text = " ".join(lines[lines.index(ts_line)+1:])
+                                        matches.append({
+                                            'course_id': v['course_id'],
+                                            'course_title': v['course_title'],
+                                            'video_title': v['video_title'],
+                                            'video_path': v['path'],
+                                            'timestamp': seconds,
+                                            'timestamp_str': time_str.split('.')[0],
+                                            'snippet': text
+                                        })
+                                        if len(matches) >= 30: return matches # Cap results
+            except:
+                pass
+    return matches
+
 
 @app.route('/subtitle/<path:video_path>')
 def serve_subtitle(video_path):
@@ -696,10 +807,27 @@ def get_transcript(video_path):
     return jsonify([])
 
 @app.route('/settings')
+@login_required
 def settings():
     conn = get_db_connection()
     user_id = get_current_user_id()
     
+    # Get API Key & Model & AI Enabled Status
+    settings_rows = conn.execute("SELECT key, value FROM user_settings WHERE user_id=? AND key IN ('gemini_api_key', 'gemini_model', 'ai_features_enabled', 'ai_provider', 'local_ai_url', 'local_whisper_url')", (user_id,)).fetchall()
+    settings_map = {row['key']: row['value'] for row in settings_rows}
+    
+    api_key = settings_map.get('gemini_api_key', '')
+    selected_model = settings_map.get('gemini_model', 'gemini-2.0-flash')
+    ai_enabled = settings_map.get('ai_features_enabled', 'true') == 'true'
+    ai_provider = settings_map.get('ai_provider', 'gemini')
+    local_ai_url = settings_map.get('local_ai_url', 'http://localhost:1234/v1/chat/completions')
+    local_whisper_url = settings_map.get('local_whisper_url', 'http://localhost:9000/v1/audio/transcriptions')
+    
+    # Quiz Stats for Settings
+    quiz_stats = conn.execute('SELECT SUM(correct_answers) as c, SUM(total_questions) as t FROM quiz_stats WHERE user_id=?', (user_id,)).fetchone()
+    quiz_correct = quiz_stats['c'] or 0
+    quiz_total = quiz_stats['t'] or 0
+
     courses_query = conn.execute('SELECT id, title, description, alternate_title FROM courses ORDER BY title').fetchall()
     
     courses_data = []
@@ -715,7 +843,7 @@ def settings():
             'percentage': stats['percentage']
         })
     conn.close()
-    return render_template('settings.html', courses=courses_data)
+    return render_template('settings.html', courses=courses_data, api_key=api_key, selected_model=selected_model, ai_enabled=ai_enabled, ai_provider=ai_provider, local_ai_url=local_ai_url, local_whisper_url=local_whisper_url, quiz_correct=quiz_correct, quiz_total=quiz_total)
 
 @app.route('/course/<int:course_id>')
 def player(course_id):
@@ -731,6 +859,7 @@ def player(course_id):
     course_root = os.path.join(COURSES_DIR, course['folder_name'])
     
     vp_map = {}
+    mastery_map = {}
     if user_id:
         vp_rows = conn.execute('''
             SELECT vp.video_path, vp.watched_time, vp.is_completed 
@@ -742,6 +871,11 @@ def player(course_id):
         for r in vp_rows:
             vp_map[r['video_path']] = {'watched_time': r['watched_time'], 'is_completed': r['is_completed']}
 
+        # Fetch mastery scores
+        m_rows = conn.execute('SELECT video_path, score FROM video_mastery WHERE user_id = ?', (user_id,)).fetchall()
+        for r in m_rows:
+            mastery_map[r['video_path']] = r['score']
+
     for module in modules:
         videos = conn.execute('SELECT * FROM videos WHERE module_id = ? ORDER BY order_index', (module['id'],)).fetchall()
         mod_dict = dict(module)
@@ -751,6 +885,7 @@ def player(course_id):
             prog = vp_map.get(v['path'], {'watched_time': 0, 'is_completed': False})
             v_dict['watched_time'] = prog['watched_time']
             v_dict['is_completed'] = prog['is_completed']
+            v_dict['mastery_score'] = mastery_map.get(v['path'], 0)
             mod_dict['videos'].append(v_dict)
         
         res_files = []
@@ -785,12 +920,17 @@ def player(course_id):
     total_videos = conn.execute('SELECT COUNT(*) as count FROM videos v JOIN modules m ON v.module_id = m.id WHERE m.course_id = ?', (course_id,)).fetchone()['count']
     is_completed = (len(watched_paths) >= total_videos and total_videos > 0)
     
+    # Check if AI is enabled
+    ai_setting = conn.execute("SELECT value FROM user_settings WHERE user_id=? AND key='ai_features_enabled'", (user_id,)).fetchone()
+    ai_enabled = ai_setting['value'] == 'true' if ai_setting else True
+
     conn.close()
     return render_template('player.html', course=course, structure=structure, 
                            last_played_path=last_played_path, 
                            last_timestamp=last_timestamp,
                            watched_paths=watched_paths, 
-                           is_completed=is_completed)
+                           is_completed=is_completed,
+                           ai_enabled=ai_enabled)
 
 @app.route('/media/<path:filename>')
 def serve_media(filename):
@@ -1024,6 +1164,49 @@ def resources_page():
                     })
     return render_template('resources.html', resources=resources)
 
+@app.route('/api/save_quiz_result', methods=['POST'])
+@login_required
+def save_quiz_result():
+    data = request.json
+    user_id = current_user.id
+    correct = data.get('correct')
+    total = data.get('total')
+    course_id = data.get('course_id')
+    
+    if correct is None or total is None:
+        return jsonify({"status": "error", "message": "Missing data"}), 400
+        
+    conn = get_db_connection()
+    conn.execute('INSERT INTO quiz_stats (user_id, course_id, correct_answers, total_questions) VALUES (?, ?, ?, ?)',
+                 (user_id, course_id, correct, total))
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "success"})
+
+@app.route('/api/save_mastery', methods=['POST'])
+@login_required
+def save_mastery():
+    data = request.json
+    user_id = current_user.id
+    video_path = data.get('video_path')
+    score = data.get('score')
+    
+    if not video_path or score is None:
+        return jsonify({"status": "error", "message": "Missing data"}), 400
+        
+    conn = get_db_connection()
+    conn.execute('''
+        INSERT INTO video_mastery (user_id, video_path, score, updated_at)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(user_id, video_path) DO UPDATE SET
+            score = excluded.score,
+            updated_at = CURRENT_TIMESTAMP
+    ''', (user_id, video_path, score))
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "success"})
+
+
 @app.route('/analytics')
 @login_required
 def analytics_page():
@@ -1034,8 +1217,20 @@ def analytics_page():
     total_completed = conn.execute('SELECT SUM(videos_completed) as c FROM daily_activity WHERE user_id=?', (user_id,)).fetchone()['c'] or 0
     
     activity_rows = conn.execute('SELECT date, seconds_watched, videos_completed FROM daily_activity WHERE user_id=?', (user_id,)).fetchall()
-    activity_data = {row['date']: {'seconds': row['seconds_watched'], 'count': row['videos_completed']} for row in activity_rows}
+    activity_data = {row['date']: {'seconds': row['seconds_watched'], 'count': row['videos_completed'], 'ai_count': 0} for row in activity_rows}
     
+    # Add AI activity to heatmap data
+    try:
+        ai_daily_rows = conn.execute("SELECT date(timestamp) as d, COUNT(*) as c FROM ai_logs WHERE user_id=? GROUP BY date(timestamp)", (user_id,)).fetchall()
+        for row in ai_daily_rows:
+            d_str = row['d']
+            if d_str in activity_data:
+                activity_data[d_str]['ai_count'] = row['c']
+            else:
+                activity_data[d_str] = {'seconds': 0, 'count': 0, 'ai_count': row['c']}
+    except sqlite3.OperationalError:
+        pass
+
     streak = 0
     check_date = datetime.date.today()
     while True:
@@ -1060,13 +1255,40 @@ def analytics_page():
         item['unlocked_at'] = user_achievements.get(aid)
         achievements_list.append(item)
         
+    # AI Analytics
+    try:
+        ai_total = conn.execute('SELECT COUNT(*) as c FROM ai_logs WHERE user_id=?', (user_id,)).fetchone()['c']
+        ai_by_provider = dict(conn.execute('SELECT provider, COUNT(*) as c FROM ai_logs WHERE user_id=? GROUP BY provider', (user_id,)).fetchall())
+        ai_by_action = dict(conn.execute('SELECT action, COUNT(*) as c FROM ai_logs WHERE user_id=? GROUP BY action', (user_id,)).fetchall())
+    except sqlite3.OperationalError:
+        ai_total = 0
+        ai_by_provider = {}
+        ai_by_action = {}
+
+    # Quiz Analytics
+    quiz_stats = conn.execute('SELECT SUM(correct_answers) as c, SUM(total_questions) as t FROM quiz_stats WHERE user_id=?', (user_id,)).fetchone()
+    quiz_correct = quiz_stats['c'] or 0
+    quiz_total = quiz_stats['t'] or 0
+
+    # Mastery Analytics
+    mastery_stats = conn.execute('SELECT AVG(score) as avg_score, COUNT(*) as total_rated FROM video_mastery WHERE user_id=?', (user_id,)).fetchone()
+    avg_mastery = round(mastery_stats['avg_score'] or 0, 1)
+    total_rated = mastery_stats['total_rated'] or 0
+        
     conn.close()
     return render_template('analytics.html', 
                            total_time=total_time, 
                            total_completed=total_completed, 
                            activity_data=activity_data, 
                            streak=streak,
-                           achievements=achievements_list)
+                           achievements=achievements_list,
+                           ai_total=ai_total,
+                           ai_by_provider=ai_by_provider,
+                           ai_by_action=ai_by_action,
+                           quiz_correct=quiz_correct,
+                           quiz_total=quiz_total,
+                           avg_mastery=avg_mastery,
+                           total_rated=total_rated)
 
 # --- Playlist Routes ---
 
@@ -1437,6 +1659,596 @@ def update_course_description():
     conn.close()
     return jsonify({"status": "success"})
 
+@app.route('/api/save_settings', methods=['POST'])
+@login_required
+def save_settings():
+    data = request.json
+    user_id = current_user.id
+    key = data.get('key')
+    value = data.get('value')
+    
+    if not key:
+        return jsonify({"status": "error", "message": "Key required"}), 400
+        
+    conn = get_db_connection()
+    conn.execute('''
+        INSERT INTO user_settings (user_id, key, value, updated_at)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(user_id, key) DO UPDATE SET
+            value = excluded.value,
+            updated_at = excluded.updated_at
+    ''', (user_id, key, value))
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "success"})
+
+def call_ai_service(provider, api_key, model_name, local_url, system_instruction, user_prompt, user_id=None, action="unknown"):
+    response_text = ""
+    
+    if provider == 'gemini':
+        if not api_key:
+            raise Exception("Gemini API Key missing.")
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_content(
+            model=model_name,
+            contents=[system_instruction, user_prompt]
+        )
+        response_text = response.text
+    else: # local
+        if not local_url:
+            raise Exception("Local AI URL missing.")
+        
+        payload = {
+            "model": model_name,
+            "messages": [
+                {"role": "system", "content": system_instruction},
+                {"role": "user", "content": user_prompt}
+            ],
+            "temperature": 0.7,
+            "stream": False
+        }
+        
+        response = requests.post(local_url, json=payload, timeout=60)
+        response.raise_for_status()
+        resp_data = response.json()
+        
+        if 'choices' in resp_data and len(resp_data['choices']) > 0:
+            response_text = resp_data['choices'][0]['message']['content']
+        else:
+            response_text = str(resp_data)
+
+    # Log Usage
+    if user_id:
+        try:
+            conn = get_db_connection()
+            conn.execute('INSERT INTO ai_logs (user_id, provider, model, action) VALUES (?, ?, ?, ?)', 
+                         (user_id, provider, model_name, action))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"Error logging AI usage: {e}")
+            
+    return response_text
+
+@app.route('/api/ai_chat', methods=['POST'])
+@login_required
+def ai_chat():
+    if not genai:
+        return jsonify({"status": "error", "message": "Google GenAI library not installed."}), 500
+        
+    user_id = current_user.id
+    
+    conn = get_db_connection()
+    settings_rows = conn.execute("SELECT key, value FROM user_settings WHERE user_id=? AND key IN ('gemini_api_key', 'ai_features_enabled', 'ai_provider', 'local_ai_url', 'gemini_model')", (user_id,)).fetchall()
+    settings = {row['key']: row['value'] for row in settings_rows}
+    conn.close()
+    
+    if settings.get('ai_features_enabled', 'true') != 'true':
+         return jsonify({"status": "error", "message": "AI features are disabled in settings."}), 403
+         
+    prompt = request.json.get('prompt')
+    model_name = request.json.get('model', settings.get('gemini_model', 'gemini-2.0-flash')) 
+    provider = settings.get('ai_provider', 'gemini')
+    api_key = settings.get('gemini_api_key')
+    local_url = settings.get('local_ai_url')
+    
+    try:
+        response_text = call_ai_service(provider, api_key, model_name, local_url, "You are a helpful assistant.", prompt, user_id, "chat_simple")
+        return jsonify({"status": "success", "response": response_text})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/get_models', methods=['GET'])
+@login_required
+def get_models():
+    if not genai:
+         return jsonify({"status": "error", "message": "Google GenAI library not installed"}), 500
+
+    user_id = current_user.id
+    conn = get_db_connection()
+    row = conn.execute("SELECT value FROM user_settings WHERE user_id=? AND key='gemini_api_key'", (user_id,)).fetchone()
+    conn.close()
+    
+    if not row or not row['value']:
+        # Return a basic default list if no key is saved yet, so the UI isn't empty
+        defaults = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
+        return jsonify({"status": "default", "models": defaults})
+        
+    try:
+        client = genai.Client(api_key=row['value'])
+        models = []
+        # list() returns an iterator of Model objects
+        print("DEBUG: Fetching models...")
+        for m in client.models.list():
+            # Debug log to see what we are getting
+            # print(f"Found model: {m.name}") 
+            
+            # Heuristic: Check for 'generateContent' OR just 'gemini' in name
+            # The SDK might differ in attribute names
+            methods = getattr(m, 'supported_generation_methods', [])
+            actions = getattr(m, 'supported_actions', [])
+            
+            name = m.name.split('/')[-1] if '/' in m.name else m.name
+            
+            if (methods and 'generateContent' in methods) or (actions and 'generateContent' in actions) or 'gemini' in name.lower():
+                models.append(name)
+        
+        # Simple sort to keep similar families together
+        models.sort(reverse=True)
+        print(f"DEBUG: Returning {len(models)} models.")
+        return jsonify({"status": "success", "models": models})
+    except Exception as e:
+        print(f"DEBUG: Error fetching models: {e}")
+        return jsonify({"status": "error", "message": str(e)})
+
+def get_or_generate_transcript(video_path, user_id):
+    """Retrieves existing transcript or generates one if missing and AI is enabled."""
+    full_path = os.path.join(COURSES_DIR, video_path)
+    base_path = os.path.splitext(full_path)[0]
+    
+    # 1. Try to find existing
+    transcript_text = ""
+    for ext in ['.vtt', '.srt']:
+        if os.path.exists(base_path + ext):
+            with open(base_path + ext, 'r', encoding='utf-8', errors='ignore') as f:
+                transcript_text = f.read()
+            break
+            
+    if transcript_text:
+        return transcript_text
+
+    # 2. If not found, attempt generation
+    conn = get_db_connection()
+    settings_rows = conn.execute("SELECT key, value FROM user_settings WHERE user_id=? AND key IN ('gemini_api_key', 'ai_features_enabled', 'ai_provider', 'local_whisper_url', 'gemini_model')", (user_id,)).fetchall()
+    settings = {row['key']: row['value'] for row in settings_rows}
+    conn.close()
+    
+    if settings.get('ai_features_enabled', 'true') != 'true':
+         raise Exception("No transcript found and AI features are disabled.")
+    
+    provider = settings.get('ai_provider', 'gemini')
+    api_key = settings.get('gemini_api_key')
+    gemini_model = settings.get('gemini_model', 'gemini-1.5-flash')
+    local_whisper_url = settings.get('local_whisper_url')
+
+    if provider == 'gemini':
+        if not genai: raise Exception("Google GenAI library not installed.")
+        if not api_key: raise Exception("Gemini API Key missing.")
+        
+        client = genai.Client(api_key=api_key)
+        file_ref = client.files.upload(file=full_path)
+        
+        while True:
+            file_info = client.files.get(name=file_ref.name)
+            if file_info.state.name == "ACTIVE": break
+            elif file_info.state.name == "FAILED": raise Exception("Gemini failed to process video.")
+            time.sleep(2)
+        
+        prompt = "Generate a transcript for this video in WebVTT format. Output ONLY the WebVTT text, starting with 'WEBVTT'."
+        response = client.models.generate_content(model=gemini_model, contents=[file_ref, prompt])
+        vtt_content = response.text.strip()
+        if vtt_content.startswith("```"):
+            vtt_content = vtt_content.split('\n', 1)[1].rsplit('\n', 1)[0].replace('webvtt', '').strip()
+        if not vtt_content.startswith("WEBVTT"): vtt_content = "WEBVTT\n\n" + vtt_content
+        
+        with open(base_path + ".vtt", 'w', encoding='utf-8') as f: f.write(vtt_content)
+        return vtt_content
+        
+    elif provider == 'local':
+        if not local_whisper_url: raise Exception("Local Whisper URL not configured.")
+        if not shutil.which('ffmpeg'): raise Exception("ffmpeg not found.")
+        
+        audio_path = base_path + ".wav"
+        subprocess.run(['ffmpeg', '-i', full_path, '-vn', '-acodec', 'pcm_s16le', '-ar', '16000', '-ac', '1', audio_path, '-y'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        
+        with open(audio_path, 'rb') as audio_file:
+            files = {'file': (os.path.basename(audio_path), audio_file, 'audio/wav')}
+            resp = requests.post(local_whisper_url, files=files, data={'response_format': 'vtt'}, timeout=300)
+            resp.raise_for_status()
+            content = resp.text
+            try:
+                if 'text' in resp.json(): content = "WEBVTT\n\n00:00:00.000 --> 00:10:00.000\n" + resp.json()['text']
+            except: pass
+            with open(base_path + ".vtt", 'w', encoding='utf-8') as f: f.write(content)
+        
+        if os.path.exists(audio_path): os.remove(audio_path)
+        return content
+    
+    raise Exception("Transcript not found and generation failed.")
+
+@app.route('/api/ai_chat_context', methods=['POST'])
+@login_required
+def ai_chat_context():
+    if not genai:
+        return jsonify({"status": "error", "message": "Google GenAI library not installed."}), 500
+        
+    user_id = current_user.id
+    data = request.json
+    video_path = data.get('video_path')
+    context_type = data.get('context_type') # chat, summarize, flashcards, quiz
+    prompt = data.get('prompt', '')
+    
+    # 1. Get Settings
+    conn = get_db_connection()
+    settings_rows = conn.execute("SELECT key, value FROM user_settings WHERE user_id=? AND key IN ('gemini_api_key', 'gemini_model', 'ai_features_enabled', 'ai_provider', 'local_ai_url')", (user_id,)).fetchall()
+    settings = {row['key']: row['value'] for row in settings_rows}
+    conn.close()
+    
+    if settings.get('ai_features_enabled', 'true') != 'true':
+         return jsonify({"status": "error", "message": "AI features are disabled in settings."}), 403
+    
+    api_key = settings.get('gemini_api_key')
+    model_name = settings.get('gemini_model', 'gemini-2.0-flash')
+    provider = settings.get('ai_provider', 'gemini')
+    local_url = settings.get('local_ai_url')
+    
+    # 2. Get Transcript (Automated)
+    try:
+        transcript_text = get_or_generate_transcript(video_path, user_id)
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+        
+    # Limit transcript size for context window if super large (rough check)
+    if len(transcript_text) > 100000:
+        transcript_text = transcript_text[:100000] + "...(truncated)"
+
+    # 3. Construct System Prompt based on Action
+    system_instruction = f"You are an expert tutor helper. You have access to the transcript of the video the user is watching.\n\nTRANSCRIPT:\n{transcript_text}\n\n"
+    
+    final_prompt = ""
+    # ... (same action logic) ...
+
+    
+    if context_type == 'chat':
+        system_instruction += "Answer the user's question based strictly on the transcript provided. Be concise and helpful."
+        final_prompt = prompt
+        
+    elif context_type == 'summarize':
+        system_instruction += "Summarize the key learning points of this video in a concise bullet-point format. Use Markdown."
+        final_prompt = "Summarize this video."
+        
+    elif context_type == 'flashcards':
+        system_instruction += """
+        Create 3-5 high-quality flashcards based on the key concepts in this video.
+        Return ONLY valid JSON in the following format:
+        [
+            {"front": "Question", "back": "Answer"},
+            {"front": "Question", "back": "Answer"}
+        ]
+        Do not add any markdown formatting (like ```json) around the output. Just the raw JSON array.
+        """
+        final_prompt = "Generate flashcards."
+        
+    elif context_type == 'quiz':
+        system_instruction += """
+        Create a short 3-question multiple choice quiz based on the video.
+        Return ONLY valid JSON in the following format:
+        {
+            "title": "Video Quiz",
+            "questions": [
+                {
+                    "question": "Question text?",
+                    "options": ["Option A", "Option B", "Option C", "Option D"],
+                    "answer": 0  // Index of correct option (0-3)
+                }
+            ]
+        }
+        Do not add any markdown formatting.
+        """
+        final_prompt = "Generate quiz."
+
+    elif context_type == 'mindmap':
+        system_instruction += """
+        Create a detailed Mind Map of the concepts in this video using Mermaid.js syntax.
+        - Start with 'mindmap' keyword.
+        - Use hierarchical indentation.
+        - Be comprehensive but concise.
+        Return ONLY the Mermaid code. Do not wrap in markdown blocks like ```mermaid.
+        """
+        final_prompt = "Generate concept mind map."
+
+    elif context_type == 'glossary':
+        system_instruction += """
+        Extract the key technical terms and jargon from this video transcript.
+        List them alphabetically with a brief, simple definition for each.
+        Format the output as a Markdown list:
+        **Term**: Definition
+        """
+        final_prompt = "Generate a glossary of terms."
+
+    elif context_type == 'polish_notes':
+        system_instruction += """
+        The user has written some rough notes for this video.
+        Your task is to rewrite and format them to be cleaner, clearer, and better structured (using Markdown).
+        - Correct typos.
+        - Use bullet points and bold headings.
+        - Preserve any timestamps (e.g. [12:30]) exactly as they are.
+        - If the user's note is vague, you can use the transcript context to clarify it slightly, but do not hallucinate new topics.
+        """
+        final_prompt = f"Here are my rough notes:\n{prompt}\n\nPlease polish them."
+
+    # 4. Call AI Service
+    try:
+        ai_text = call_ai_service(provider, api_key, model_name, local_url, system_instruction, final_prompt, user_id, context_type)
+        ai_text = ai_text.strip()
+        
+        # Post-process for specific actions
+        if context_type == 'flashcards':
+            # Clean potential markdown
+            clean_text = ai_text.replace('```json', '').replace('```', '').strip()
+            try:
+                cards = json.loads(clean_text)
+                
+                # Save to DB
+                conn = get_db_connection()
+                count = 0
+                today = datetime.date.today().strftime("%Y-%m-%d")
+                
+                # We need course_id. Retrieve it from video_path.
+                vid_row = conn.execute('''
+                    SELECT v.id, m.course_id 
+                    FROM videos v 
+                    JOIN modules m ON v.module_id = m.id 
+                    WHERE v.path = ?
+                ''', (video_path,)).fetchone()
+                
+                course_id = vid_row['course_id'] if vid_row else None
+                
+                if course_id:
+                    for card in cards:
+                        conn.execute('''
+                            INSERT INTO flashcards (user_id, course_id, video_path, front, back, next_review_date)
+                            VALUES (?, ?, ?, ?, ?, ?)
+                        ''', (user_id, course_id, video_path, card['front'], card['back'], today))
+                        count += 1
+                    conn.commit()
+                conn.close()
+                return jsonify({"status": "success", "flashcards_count": count})
+                
+            except json.JSONDecodeError:
+                return jsonify({"status": "error", "message": "Failed to parse AI response as JSON."})
+                
+        elif context_type == 'quiz':
+             # Clean potential markdown
+            clean_text = ai_text.replace('```json', '').replace('```', '').strip()
+            return jsonify({"status": "success", "response": clean_text, "is_json": True})
+
+        return jsonify({"status": "success", "response": ai_text})
+        
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/api/ai_plan_course', methods=['POST'])
+@login_required
+def ai_plan_course():
+    if not genai:
+        return jsonify({"status": "error", "message": "Google GenAI library not installed."}), 500
+        
+    user_id = current_user.id
+    data = request.json
+    course_id = data.get('course_id')
+    hours = data.get('hours_per_week', 5)
+    
+    # 1. Get Settings
+    conn = get_db_connection()
+    settings_rows = conn.execute("SELECT key, value FROM user_settings WHERE user_id=? AND key IN ('gemini_api_key', 'gemini_model', 'ai_features_enabled', 'ai_provider', 'local_ai_url')", (user_id,)).fetchall()
+    settings = {row['key']: row['value'] for row in settings_rows}
+    
+    if settings.get('ai_features_enabled', 'true') != 'true':
+         conn.close()
+         return jsonify({"status": "error", "message": "AI features are disabled in settings."}), 403
+    
+    api_key = settings.get('gemini_api_key')
+    model_name = settings.get('gemini_model', 'gemini-2.0-flash')
+    provider = settings.get('ai_provider', 'gemini')
+    local_url = settings.get('local_ai_url')
+    
+    # ... (course structure logic) ...
+    course = conn.execute('SELECT title FROM courses WHERE id=?', (course_id,)).fetchone()
+    modules = conn.execute('SELECT id, title FROM modules WHERE course_id=? ORDER BY order_index', (course_id,)).fetchall()
+    
+    syllabus_text = f"Course: {course['title']}\n"
+    total_seconds = 0
+    
+    for mod in modules:
+        syllabus_text += f"\nModule: {mod['title']}\n"
+        videos = conn.execute('SELECT title, duration FROM videos WHERE module_id=? ORDER BY order_index', (mod['id'],)).fetchall()
+        for v in videos:
+            dur = int(v['duration'])
+            total_seconds += dur
+            syllabus_text += f"- {v['title']} ({dur // 60} mins)\n"
+    
+    conn.close()
+
+    # 3. Construct Prompt
+    system_instruction = "You are an expert curriculum designer."
+    final_prompt = f"""
+    Here is the syllabus for the course "{course['title']}":
+    
+    {syllabus_text}
+    
+    Total Duration: {total_seconds // 3600} hours {((total_seconds % 3600) // 60)} minutes.
+    
+    The student has {hours} hours per week available to study.
+    
+    Please create a structured Study Plan.
+    - Break it down by Week (Week 1, Week 2, etc.).
+    - Group videos logically based on the time constraint.
+    - Include time for practice/review in your calculation (assume 1.5x video duration for actual study time).
+    - Format output in clear Markdown.
+    """
+
+    # 4. Call AI Service
+    try:
+        plan_text = call_ai_service(provider, api_key, model_name, local_url, system_instruction, final_prompt, user_id, "course_plan")
+        return jsonify({"status": "success", "plan": plan_text})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/generate_transcript', methods=['POST'])
+@login_required
+def generate_transcript():
+    user_id = current_user.id
+    data = request.json
+    video_path = data.get('video_path')
+    
+    # 1. Get Settings
+    conn = get_db_connection()
+    settings_rows = conn.execute("SELECT key, value FROM user_settings WHERE user_id=? AND key IN ('gemini_api_key', 'ai_features_enabled', 'ai_provider', 'local_whisper_url', 'gemini_model')", (user_id,)).fetchall()
+    settings = {row['key']: row['value'] for row in settings_rows}
+    conn.close()
+    
+    if settings.get('ai_features_enabled', 'true') != 'true':
+         return jsonify({"status": "error", "message": "AI features are disabled."}), 403
+    
+    provider = settings.get('ai_provider', 'gemini')
+    api_key = settings.get('gemini_api_key')
+    gemini_model = settings.get('gemini_model', 'gemini-1.5-flash')
+    local_whisper_url = settings.get('local_whisper_url')
+
+    # 2. Locate File
+    full_path = os.path.join(COURSES_DIR, video_path)
+    if not os.path.exists(full_path):
+        return jsonify({"status": "error", "message": "File not found."}), 404
+        
+    base_path = os.path.splitext(full_path)[0]
+    vtt_path = base_path + ".vtt"
+
+    # 3. Process based on Provider
+    try:
+        if provider == 'gemini':
+            if not genai:
+                return jsonify({"status": "error", "message": "Google GenAI library not installed."}), 500
+            if not api_key:
+                return jsonify({"status": "error", "message": "Gemini API Key missing."}), 400
+                
+            client = genai.Client(api_key=api_key)
+            file_ref = client.files.upload(file=full_path)
+            
+            # Wait for processing
+            print(f"DEBUG: Uploaded {full_path}, waiting for processing...")
+            while True:
+                file_info = client.files.get(name=file_ref.name)
+                if file_info.state.name == "ACTIVE":
+                    break
+                elif file_info.state.name == "FAILED":
+                    return jsonify({"status": "error", "message": "Gemini failed to process the video file."}), 500
+                print("DEBUG: Still processing...")
+                time.sleep(2)
+            
+            prompt = "Generate a transcript for this video in WebVTT format. Output ONLY the WebVTT text, starting with 'WEBVTT'. No conversational text."
+            
+            response = client.models.generate_content(
+                model=gemini_model,
+                contents=[file_ref, prompt]
+            )
+            
+            vtt_content = response.text.strip()
+            
+            # Cleanup markdown
+            if vtt_content.startswith("```"):
+                vtt_content = vtt_content.split('\n', 1)[1]
+                vtt_content = vtt_content.rsplit('\n', 1)[0]
+                vtt_content = vtt_content.replace('webvtt', '').strip()
+                
+            if not vtt_content.startswith("WEBVTT"):
+                vtt_content = "WEBVTT\n\n" + vtt_content
+                
+            with open(vtt_path, 'w', encoding='utf-8') as f:
+                f.write(vtt_content)
+            
+            # Log Usage
+            try:
+                conn = get_db_connection()
+                conn.execute('INSERT INTO ai_logs (user_id, provider, model, action) VALUES (?, ?, ?, ?)', 
+                             (user_id, 'gemini', gemini_model, 'transcribe_video'))
+                conn.commit()
+                conn.close()
+            except: pass
+
+            return jsonify({"status": "success", "message": "Transcript generated with Gemini!"})
+            
+        elif provider == 'local':
+            if not local_whisper_url:
+                return jsonify({"status": "error", "message": "Local Whisper URL not configured."}), 400
+                
+            # Check ffmpeg
+            if not shutil.which('ffmpeg'):
+                return jsonify({"status": "error", "message": "ffmpeg not found. Please install it to use local transcription (e.g. 'brew install ffmpeg')."}), 500
+            
+            # Extract Audio
+            audio_path = base_path + ".wav"
+            subprocess.run([
+                'ffmpeg', '-i', full_path, '-vn', 
+                '-acodec', 'pcm_s16le', '-ar', '16000', '-ac', '1', 
+                audio_path, '-y'
+            ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            
+            # Send to Whisper
+            with open(audio_path, 'rb') as audio_file:
+                # OpenAI Whisper API format
+                files = {'file': (os.path.basename(audio_path), audio_file, 'audio/wav')}
+                data = {'response_format': 'vtt'} # Request VTT directly
+                
+                resp = requests.post(local_whisper_url, files=files, data=data, timeout=300)
+                resp.raise_for_status()
+                
+                # Check content type or guess
+                content = resp.text
+                
+                # If server ignores response_format and returns JSON
+                try:
+                    json_resp = resp.json()
+                    if 'text' in json_resp:
+                        # Fallback: We got raw text. Creating a fake VTT (no timestamps) is bad, 
+                        # but better than crashing. However, usually local servers support 'vtt' or 'srt'.
+                        # Let's assume the user configured a server that supports standard OpenAI API.
+                        content = "WEBVTT\n\n00:00:00.000 --> 00:10:00.000\n" + json_resp['text']
+                except:
+                    pass # It wasn't JSON, assume it is the requested VTT text
+                
+                with open(vtt_path, 'w', encoding='utf-8') as f:
+                    f.write(content)
+            
+            # Cleanup wav
+            if os.path.exists(audio_path):
+                os.remove(audio_path)
+                
+            # Log Usage
+            try:
+                conn = get_db_connection()
+                conn.execute('INSERT INTO ai_logs (user_id, provider, model, action) VALUES (?, ?, ?, ?)', 
+                             (user_id, 'local', 'whisper', 'transcribe_video'))
+                conn.commit()
+                conn.close()
+            except: pass
+
+            return jsonify({"status": "success", "message": "Transcript generated locally!"})
+            
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 @app.route('/certificate/<int:course_id>')
 @login_required
 def download_certificate(course_id):
@@ -1535,6 +2347,9 @@ def download_certificate(course_id):
     buffer.seek(0)
     return send_file(buffer, as_attachment=True, download_name=f"Certificate_{course['title'][:20]}.pdf", mimetype='application/pdf')
 
-if __name__ == '__main__':
+# Ensure DB is initialized on startup
+with app.app_context():
     init_db()
+
+if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5001, debug=True)

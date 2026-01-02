@@ -4,7 +4,33 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ course.title }} - Player</title>
+    <!-- SweetAlert2 -->
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <!-- Mermaid.js -->
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <script>mermaid.initialize({ startOnLoad: false, theme: 'dark' });</script>
     <style>
+        /* SweetAlert2 Theme Overrides */
+        .swal2-popup {
+            background-color: var(--bg-card) !important;
+            color: var(--text-main) !important;
+            border: 1px solid var(--border-color);
+        }
+        .swal2-title, .swal2-content, .swal2-html-container {
+            color: var(--text-main) !important;
+        }
+        .swal2-input {
+            background-color: var(--bg-body) !important;
+            color: var(--text-main) !important;
+            border: 1px solid var(--border-color) !important;
+        }
+        .swal2-confirm {
+            background-color: var(--primary-color) !important;
+        }
+        .swal2-cancel {
+            background-color: #6e7881 !important;
+        }
+
         :root {
             --bg-body: #f7f9fa;
             --bg-sidebar: #ffffff;
@@ -620,7 +646,16 @@
                 <a href="/certificate/{{ course.id }}" class="control-btn" style="background: #ffb700; color: #000; text-decoration: none; font-weight: bold;">🏆 Certificate</a>
                 {% endif %}
                 
+                <div style="display: flex; gap: 5px; background: rgba(0,0,0,0.5); padding: 4px; border-radius: 4px;">
+                    <button class="control-btn speed-btn" onclick="setSpeed(1)" title="Normal Speed" style="font-size: 0.8em; padding: 4px 8px;">1x</button>
+                    <button class="control-btn speed-btn" onclick="setSpeed(1.5)" title="1.5x Speed" style="font-size: 0.8em; padding: 4px 8px;">1.5x</button>
+                    <button class="control-btn speed-btn" onclick="setSpeed(2)" title="2x Speed" style="font-size: 0.8em; padding: 4px 8px;">2x</button>
+                    <button class="control-btn speed-btn" onclick="setSpeed(2.5)" title="2.5x Speed" style="font-size: 0.8em; padding: 4px 8px;">2.5x</button>
+                    <button class="control-btn speed-btn" onclick="setSpeed(3)" title="3x Speed" style="font-size: 0.8em; padding: 4px 8px;">3x</button>
+                </div>
+
                 <button class="control-btn cinema-btn" onclick="toggleCinemaMode()" title="Cinema Mode (Lights Off)">💡</button>
+                <button class="control-btn" id="rate-btn" onclick="openMastery()" title="Rate Mastery" style="display: none;">⭐ Rate</button>
                 <button class="control-btn" onclick="openInfo()" title="Course Info">ⓘ Info</button>
                 <button class="control-btn" onclick="toggleTheme()" title="Toggle Dark Mode">🌓</button>
             </div>
@@ -635,10 +670,18 @@
                 <track id="subtitles" kind="captions" label="English" srclang="en" default>
                 Your browser does not support the video tag.
             </video>
-            
-            <div id="quiz-container" style="display: none; padding: 40px; overflow-y: auto; height: 100%; box-sizing: border-box; background-color: var(--bg-body);">
-                <!-- Quiz content -->
-            </div>
+
+            <style>
+                .star-rating { display: flex; gap: 10px; cursor: pointer; justify-content: center; padding: 20px 0; }
+                .star { font-size: 1.5em; color: var(--border-color); transition: color 0.2s; }
+                .star.active { color: #ffb700; }
+                .mastery-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 5px; flex-shrink: 0; margin-top: 5px; }
+                .mastery-1 { background-color: #f44336; }
+                .mastery-2 { background-color: #ff9800; }
+                .mastery-3 { background-color: #ffeb3b; }
+                .mastery-4 { background-color: #8bc34a; }
+                .mastery-5 { background-color: #4caf50; }
+            </style>
             
             <style>
                 .quiz-question {
@@ -671,7 +714,12 @@
                     <button class="tab-btn active" onclick="openTab('notes')">📝 My Notes</button>
                     <button class="tab-btn" onclick="openTab('resources')">📂 Resources</button>
                     <button class="tab-btn" onclick="openTab('transcript')">📜 Transcript</button>
-                    <button class="tab-btn" onclick="openTab('flashcards')">🧠 Flashcard</button>
+                    <button class="tab-btn" onclick="openTab('docs-tab')">📄 Documents</button>
+                    <button class="tab-btn" onclick="openTab('flashcards')">🧠 Flashcards</button>
+                    <button class="tab-btn" id="quiz-tab-btn" onclick="openTab('quiz-tab')" style="display: none;">📝 Quiz</button>
+                    {% if ai_enabled %}
+                    <button class="tab-btn" onclick="openTab('ai-assistant')">✨ AI Assistant</button>
+                    {% endif %}
                 </div>
                 <button class="toggle-tabs-btn" onclick="toggleTabs()" title="Minimize/Maximize">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -680,8 +728,11 @@
                 </button>
             </div>
             <div id="notes" class="tab-content active">
-                <div class="notes-toolbar">
+                <div class="notes-toolbar" style="display: flex; gap: 10px; flex-wrap: wrap;">
                     <button class="timestamp-btn" onclick="insertTimestamp()" title="Insert current video time">⏱️ Insert Timestamp</button>
+                    {% if ai_enabled %}
+                    <button class="timestamp-btn" onclick="triggerAI('polish_notes')" title="Rewrite notes with better formatting" style="border-color: var(--primary-color); color: var(--primary-color);">✨ Polish Notes</button>
+                    {% endif %}
                 </div>
                 <textarea id="note-editor" placeholder="Type your notes for this video here... (Auto-saved on blur)" disabled></textarea>
                 <div id="jump-links-container" class="jump-links"></div>
@@ -706,6 +757,12 @@
                     <p style="color: var(--text-secondary);">Select a video with subtitles to view transcript.</p>
                 </div>
             </div>
+            <div id="docs-tab" class="tab-content" style="padding: 0; overflow: hidden;">
+                <iframe id="doc-viewer" style="width: 100%; height: 100%; border: none; display: none;"></iframe>
+                <div id="doc-placeholder" style="display: flex; align-items: center; justify-content: center; height: 100%; color: var(--text-secondary);">
+                    Select a PDF from Resources to view here.
+                </div>
+            </div>
             <div id="flashcards" class="tab-content">
                 <div style="display: flex; flex-direction: column; gap: 10px; height: 100%;">
                     <input id="card-front" placeholder="Front (Question)" style="padding: 10px; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-sidebar); color: var(--text-main);">
@@ -713,6 +770,33 @@
                     <button class="resume-btn" onclick="saveFlashcard()">Save Flashcard</button>
                 </div>
             </div>
+            <div id="quiz-tab" class="tab-content">
+                <div id="quiz-container" style="padding: 10px;">
+                    <p style="color: var(--text-secondary); text-align: center;">No quiz loaded for this segment.</p>
+                </div>
+            </div>
+            {% if ai_enabled %}
+            <div id="ai-assistant" class="tab-content">
+                <div class="ai-toolbar" style="display: flex; gap: 10px; margin-bottom: 10px; flex-wrap: wrap;">
+                    <button class="timestamp-btn" onclick="triggerAI('summarize')">📝 Summarize Video</button>
+                    <button class="timestamp-btn" onclick="triggerAI('quiz')">🎓 Generate Quiz</button>
+                    <button class="timestamp-btn" onclick="triggerAI('flashcards')">🧠 Auto-Flashcards</button>
+                    <button class="timestamp-btn" onclick="triggerAI('glossary')">📖 Glossary</button>
+                    <button class="timestamp-btn" onclick="triggerAI('mindmap')">🧬 Mind Map</button>
+                </div>
+                <div id="ai-chat-output" style="flex: 1; border: 1px solid var(--border-color); border-radius: 4px; padding: 10px; background: var(--bg-sidebar); overflow-y: auto; height: 60%; margin-bottom: 10px;">
+                    <div style="color: var(--text-secondary); text-align: center; margin-top: 20px;">
+                        Select a video and ask me anything about it!<br>
+                        "What is the main topic?"<br>
+                        "Explain the code example."
+                    </div>
+                </div>
+                <div style="display: flex; gap: 10px;">
+                    <input type="text" id="ai-user-input" placeholder="Ask about this video..." style="flex: 1; padding: 10px; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-sidebar); color: var(--text-main);" onkeypress="handleAIChatEnter(event)">
+                    <button class="resume-btn" style="margin-top: 0;" onclick="sendAIChat()">Send</button>
+                </div>
+            </div>
+            {% endif %}
         </div>
     </div>
 
@@ -737,12 +821,17 @@
     <div class="sidebar" id="sidebar">
         <div class="sidebar-header">
             <span>{{ course.title }}</span>
-            <button class="sidebar-toggle-btn" onclick="toggleSidebar()" title="Toggle Sidebar">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <polyline points="13 17 18 12 13 7"></polyline>
-                    <polyline points="6 17 11 12 6 7"></polyline>
-                </svg>
-            </button>
+            <div style="display:flex; gap:5px;">
+                {% if ai_enabled %}
+                <button class="sidebar-toggle-btn" onclick="generateStudyPlan()" title="Generate AI Study Plan" style="color: var(--primary-color);">📅</button>
+                {% endif %}
+                <button class="sidebar-toggle-btn" onclick="toggleSidebar()" title="Toggle Sidebar">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="13 17 18 12 13 7"></polyline>
+                        <polyline points="6 17 11 12 6 7"></polyline>
+                    </svg>
+                </button>
+            </div>
         </div>
         <div class="sidebar-search">
             <input type="text" id="sidebarSearch" placeholder="Filter videos..." onkeyup="filterSidebar()">
@@ -763,6 +852,7 @@
                         data-module="{{ module.title }}"
                         data-type="{{ video.item_type }}"
                         data-raw-path="{{ video.path }}"
+                        data-mastery="{{ video.mastery_score }}"
                         title="{{ video.title }}"
                         onclick="playVideo('/media/{{ video.path }}', '{{ video.title }}', this, '{{ video.item_type }}')">
                         
@@ -771,7 +861,10 @@
                         </div>
                         
                         <div class="video-item-content">
-                            <span>{{ video.title }}</span>
+                            <div style="display: flex; align-items: flex-start;">
+                                <div class="mastery-dot mastery-{{ video.mastery_score }}" id="dot-{{ loop.index }}" style="{% if video.mastery_score == 0 %}display:none;{% endif %}"></div>
+                                <span>{{ video.title }}</span>
+                            </div>
                             {% if video.item_type != 'quiz' %}
                             <div class="video-meta">
                                 <span>{{ video.duration | format_time }}</span>
@@ -812,6 +905,26 @@
             </div>
         </div>
     </div>
+
+    <!-- Mastery Modal -->
+    <div id="masteryModal" class="modal">
+        <div class="modal-content" style="max-width: 400px; text-align: center;">
+            <div class="modal-header">
+                <h2>Rate Understanding</h2>
+                <span class="close-modal" onclick="closeMastery()">&times;</span>
+            </div>
+            <p style="color: var(--text-secondary); margin-bottom: 10px;">How confident are you with this lesson?</p>
+            <div class="star-rating">
+                <span class="star" onclick="rateMastery(1)">★</span>
+                <span class="star" onclick="rateMastery(2)">★</span>
+                <span class="star" onclick="rateMastery(3)">★</span>
+                <span class="star" onclick="rateMastery(4)">★</span>
+                <span class="star" onclick="rateMastery(5)">★</span>
+            </div>
+            <div id="mastery-label" style="font-weight: bold; font-size: 1.1em; color: var(--primary-color); margin-top: 10px;">Rate understanding</div>
+            <button class="resume-btn" onclick="closeMastery()" style="margin-top: 25px; width: 100%;">Close</button>
+        </div>
+    </div>
     
     <!-- Toast Notification -->
     <div id="toast" class="toast"></div>
@@ -850,9 +963,15 @@
         // --- Modal Logic ---
         function openInfo() { document.getElementById('infoModal').style.display = "block"; }
         function closeInfo() { document.getElementById('infoModal').style.display = "none"; }
+        
+        function openMastery() { document.getElementById('masteryModal').style.display = "block"; }
+        function closeMastery() { document.getElementById('masteryModal').style.display = "none"; }
+
         window.onclick = function(event) {
-            const modal = document.getElementById('infoModal');
-            if (event.target == modal) { modal.style.display = "none"; }
+            const iModal = document.getElementById('infoModal');
+            const mModal = document.getElementById('masteryModal');
+            if (event.target == iModal) { iModal.style.display = "none"; }
+            if (event.target == mModal) { mModal.style.display = "none"; }
         }
         
         // --- Tab Logic ---
@@ -877,25 +996,190 @@
             document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
             
             document.getElementById(tabName).classList.add('active');
-            // Find button by index
-            const btns = document.querySelectorAll('.tab-btn');
-            if (tabName === 'notes') btns[0].classList.add('active');
-            if (tabName === 'resources') btns[1].classList.add('active');
-            if (tabName === 'transcript') btns[2].classList.add('active');
-            if (tabName === 'flashcards') btns[3].classList.add('active');
+            // Find button by id or text
+            if (tabName === 'notes') document.querySelectorAll('.tab-btn')[0].classList.add('active');
+            if (tabName === 'resources') document.querySelectorAll('.tab-btn')[1].classList.add('active');
+            if (tabName === 'transcript') document.querySelectorAll('.tab-btn')[2].classList.add('active');
+            if (tabName === 'docs-tab') document.querySelectorAll('.tab-btn')[3].classList.add('active');
+            if (tabName === 'flashcards') document.querySelectorAll('.tab-btn')[4].classList.add('active');
+            if (tabName === 'quiz-tab') document.getElementById('quiz-tab-btn').classList.add('active');
+            if (tabName === 'ai-assistant') document.querySelectorAll('.tab-btn')[document.querySelectorAll('.tab-btn').length - 1].classList.add('active');
+        }
+
+        // --- AI Assistant Logic ---
+        function handleAIChatEnter(e) {
+            if (e.key === 'Enter') sendAIChat();
+        }
+
+        function appendAIMessage(role, text) {
+            const container = document.getElementById('ai-chat-output');
+            const div = document.createElement('div');
+            div.style.margin = "10px 0";
+            div.style.padding = "10px";
+            div.style.borderRadius = "4px";
+            
+            if (role === 'user') {
+                div.style.background = "var(--hover-bg)";
+                div.style.textAlign = "right";
+                div.innerHTML = `<b>You:</b> ${text}`;
+            } else {
+                div.style.background = "var(--bg-body)";
+                div.style.border = "1px solid var(--border-color)";
+                
+                // Detect Mermaid
+                if (text.trim().startsWith('mindmap')) {
+                    const id = 'mermaid-' + Math.random().toString(36).substr(2, 9);
+                    div.innerHTML = `<b>AI:</b> Here is the concept map:<br><div id="${id}" class="mermaid-container" style="background: white; padding: 10px; border-radius: 4px; margin-top: 10px; overflow: auto;"></div>`;
+                    setTimeout(() => {
+                        mermaid.render(id + '-svg', text).then(({ svg }) => {
+                            document.getElementById(id).innerHTML = svg;
+                        }).catch(err => {
+                            document.getElementById(id).innerText = "Error rendering diagram: " + err;
+                        });
+                    }, 100);
+                } else {
+                    div.innerHTML = `<b>AI:</b> ${text.replace(/\n/g, '<br>')}`;
+                }
+            }
+            container.appendChild(div);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function sendAIChat() {
+            const input = document.getElementById('ai-user-input');
+            const text = input.value.trim();
+            if (!text) return;
+            
+            if (!currentVideoPath) {
+                Swal.fire('Video Required', "Please select a video first.", 'warning');
+                return;
+            }
+
+            appendAIMessage('user', text);
+            input.value = '';
+            
+            // Collect context (transcript)
+            // We send the path, backend handles transcript loading for context
+            const payload = {
+                prompt: text,
+                video_path: currentVideoPath,
+                context_type: 'chat' 
+            };
+            
+            const loadingDiv = document.createElement('div');
+            loadingDiv.id = 'ai-loading';
+            loadingDiv.innerText = 'AI is thinking...';
+            loadingDiv.style.fontStyle = 'italic';
+            loadingDiv.style.color = 'var(--text-secondary)';
+            loadingDiv.style.margin = '10px 0';
+            document.getElementById('ai-chat-output').appendChild(loadingDiv);
+            
+            fetch('/api/ai_chat_context', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            })
+            .then(res => res.json())
+            .then(data => {
+                document.getElementById('ai-loading').remove();
+                if (data.status === 'success') {
+                    appendAIMessage('ai', data.response);
+                } else {
+                    appendAIMessage('ai', "Error: " + data.message);
+                }
+            })
+            .catch(err => {
+                 document.getElementById('ai-loading').remove();
+                 appendAIMessage('ai', "Error: " + err);
+            });
+        }
+
+        function triggerAI(action) {
+            if (!currentVideoPath) {
+                Swal.fire('Video Required', "Please select a video first.", 'warning');
+                return;
+            }
+            
+            Swal.fire({
+                title: 'Confirm AI Action',
+                text: `Are you sure you want to ${action} this video? This may take a few seconds.`,
+                icon: 'question',
+                showCancelButton: true,
+                confirmButtonText: 'Yes, proceed'
+            }).then((result) => {
+                if (!result.isConfirmed) return;
+
+                let prompt = "";
+                if (action === 'polish_notes') {
+                    prompt = document.getElementById('note-editor').value;
+                    if (!prompt.trim()) {
+                        Swal.fire('Empty Notes', "Your notes are empty! Type something first.", 'warning');
+                        return;
+                    }
+                    appendAIMessage('ai', "Polishing your notes... please wait.");
+                } else {
+                    appendAIMessage('ai', `I'm working on your request (${action})...`);
+                }
+                
+                const payload = {
+                    video_path: currentVideoPath,
+                    context_type: action,
+                    prompt: prompt
+                };
+                
+                fetch('/api/ai_chat_context', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        if (action === 'flashcards' && data.flashcards_count) {
+                            appendAIMessage('ai', `Success! I created ${data.flashcards_count} new flashcards for you. Check the Flashcards tab!`);
+                                            } else if (action === 'quiz' && data.is_json) {
+                                                 try {
+                                                     const quizData = JSON.parse(data.response);
+                                                     appendAIMessage('ai', "Quiz generated successfully! I've opened it in the Quiz tab.");
+                                                     // Show button and switch tab
+                                                     document.getElementById('quiz-tab-btn').style.display = 'block';
+                                                     openTab('quiz-tab');
+                                                     renderQuiz(quizData);
+                                                 } catch (e) {
+                                                     appendAIMessage('ai', "Error parsing quiz data: " + e);
+                                                 }
+                                            } else if (action === 'polish_notes') {                            document.getElementById('note-editor').value = data.response;
+                            appendAIMessage('ai', "Your notes have been polished! Check the Notes tab.");
+                            // Trigger save
+                            document.getElementById('note-editor').dispatchEvent(new Event('blur'));
+                        } else {
+                            appendAIMessage('ai', data.response);
+                        }
+                    } else {
+                        appendAIMessage('ai', "Error: " + data.message);
+                    }
+                });
+            });
+        }
+
+        function startGeneratedQuiz(quizId) {
+             // For now, we can just alert or show simple UI. 
+             // Ideally we load it into the quiz container.
+             // We need a route to fetch the generated quiz by ID or pass the data directly.
+             Swal.fire('Coming Soon', "Feature coming in next step: Playing generated quizzes!", 'info');
         }
 
         // --- Flashcard Logic ---
         function saveFlashcard() {
             if (!isAuthenticated) {
-                alert("Please login to create flashcards.");
+                Swal.fire('Login Required', "Please login to create flashcards.", 'info');
                 return;
             }
             const front = document.getElementById('card-front').value;
             const back = document.getElementById('card-back').value;
             
             if (!front || !back) {
-                alert("Please enter both front and back.");
+                Swal.fire('Missing Content', "Please enter both front and back.", 'warning');
                 return;
             }
             
@@ -911,7 +1195,7 @@
             }).then(res => res.json())
             .then(data => {
                 if (data.status === 'success') {
-                    alert("Flashcard saved to your deck!");
+                    Swal.fire('Success', "Flashcard saved to your deck!", 'success');
                     document.getElementById('card-front').value = "";
                     document.getElementById('card-back').value = "";
                 }
@@ -921,6 +1205,21 @@
         // --- Cinema Mode Logic ---
         function toggleCinemaMode() {
             document.body.classList.toggle('cinema-mode');
+        }
+
+        // --- Speed Logic ---
+        function setSpeed(rate) {
+            player.playbackRate = rate;
+            localStorage.setItem('playbackRate', rate);
+            
+            // Highlight active button
+            document.querySelectorAll('.speed-btn').forEach(btn => {
+                if (parseFloat(btn.innerText) === rate) {
+                    btn.classList.add('active-speed');
+                } else {
+                    btn.classList.remove('active-speed');
+                }
+            });
         }
         
         // --- Sidebar Filter Logic ---
@@ -959,14 +1258,83 @@
             });
         }
 
+        function generateStudyPlan() {
+            if (!isAuthenticated) {
+                Swal.fire('Login Required', "Please login to generate a study plan.", 'info');
+                return;
+            }
+            
+            Swal.fire({
+                title: 'Study Availability',
+                text: 'How many hours per week can you study?',
+                input: 'number',
+                inputValue: 5,
+                showCancelButton: true,
+                confirmButtonText: 'Generate Plan'
+            }).then((result) => {
+                if (result.isConfirmed && result.value) {
+                    const hoursPerWeek = result.value;
+                    openTab('ai-assistant');
+                    appendAIMessage('ai', `Generating a ${hoursPerWeek}-hour/week study plan for this course...`);
+                    
+                    fetch('/api/ai_plan_course', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ 
+                            course_id: courseId,
+                            hours_per_week: hoursPerWeek
+                        })
+                    })
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.status === 'success') {
+                            appendAIMessage('ai', data.plan);
+                        } else {
+                            appendAIMessage('ai', "Error generating plan: " + data.message);
+                        }
+                    })
+                    .catch(err => appendAIMessage('ai', "Error: " + err));
+                }
+            });
+        }
+
         // --- Init: Resume Last Watched & Speed ---
         document.addEventListener('DOMContentLoaded', () => {
             // Restore Playback Speed
             const savedSpeed = localStorage.getItem('playbackRate');
             if (savedSpeed) {
-                player.playbackRate = parseFloat(savedSpeed);
+                setSpeed(parseFloat(savedSpeed));
+            } else {
+                setSpeed(1); // Default
             }
             
+            // Check for deep links (search results)
+            const urlParams = new URLSearchParams(window.location.search);
+            const deepVideo = urlParams.get('video');
+            const deepTime = urlParams.get('t');
+
+            if (deepVideo) {
+                const videoItems = document.querySelectorAll('.video-item');
+                let targetItem = null;
+                videoItems.forEach(item => {
+                    if (item.getAttribute('data-raw-path') === deepVideo) {
+                        targetItem = item;
+                    }
+                });
+
+                if (targetItem) {
+                    targetItem.click();
+                    targetItem.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    if (deepTime) {
+                        player.addEventListener('loadedmetadata', function onLoaded() {
+                            player.currentTime = parseFloat(deepTime);
+                            player.removeEventListener('loadedmetadata', onLoaded);
+                        });
+                    }
+                    return; // Skip resume logic if deep linking
+                }
+            }
+
             // Resume Logic
             if (lastPlayedPath && lastPlayedPath !== "None") {
                 const videoItems = document.querySelectorAll('.video-item');
@@ -1024,17 +1392,25 @@
             if (type === 'quiz') {
                 player.style.display = 'none';
                 player.pause();
-                document.getElementById('quiz-container').style.display = 'block';
+                document.getElementById('rate-btn').style.display = 'none';
+                document.getElementById('quiz-tab-btn').style.display = 'block';
+                openTab('quiz-tab');
                 loadQuiz(currentVideoPath); 
             } else {
                 document.getElementById('quiz-container').style.display = 'none';
                 player.style.display = 'block';
                 
+                // Show Mastery Button
+                document.getElementById('rate-btn').style.display = 'inline-block';
+                const currentScore = parseInt(activeElement.getAttribute('data-mastery') || '0');
+                highlightStars(currentScore);
+                updateMasteryLabel(currentScore);
+
                 player.src = src;
                 
                 const savedSpeed = localStorage.getItem('playbackRate');
                 if (savedSpeed) {
-                    player.playbackRate = parseFloat(savedSpeed);
+                    setSpeed(parseFloat(savedSpeed));
                 }
                 
                 const subTrack = document.getElementById('subtitles');
@@ -1055,6 +1431,47 @@
                 loadNote(currentVideoPath);
             }
         }
+
+        function highlightStars(score) {
+            const stars = document.querySelectorAll('.star');
+            stars.forEach((s, i) => {
+                if (i < score) s.classList.add('active');
+                else s.classList.remove('active');
+            });
+        }
+
+        function updateMasteryLabel(score) {
+            const label = document.getElementById('mastery-label');
+            const texts = ["Rate understanding", "Confused", "Need Review", "Getting there", "Good", "Mastered!"];
+            label.innerText = texts[score] || texts[0];
+        }
+
+        function rateMastery(score) {
+            if (!isAuthenticated) {
+                Swal.fire('Login Required', 'Please login to rate mastery', 'info');
+                return;
+            }
+            if (!currentVideoPath) return;
+
+            highlightStars(score);
+            updateMasteryLabel(score);
+
+            fetch('/api/save_mastery', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ video_path: currentVideoPath, score: score })
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    // Update sidebar
+                    currentVideoItem.setAttribute('data-mastery', score);
+                    const dot = currentVideoItem.querySelector('.mastery-dot');
+                    dot.style.display = 'inline-block';
+                    dot.className = `mastery-dot mastery-${score}`;
+                }
+            });
+        }
         
         // --- Transcript Logic ---
         let transcriptData = [];
@@ -1066,11 +1483,54 @@
             fetch(`/api/transcript/${encodeURIComponent(videoPath)}`)
             .then(res => res.json())
             .then(data => {
-                transcriptData = data;
-                renderTranscript(data);
+                if (data.length > 0) {
+                    transcriptData = data;
+                    renderTranscript(data);
+                } else {
+                    throw new Error("Empty transcript");
+                }
             })
             .catch(err => {
-                container.innerHTML = '<p style="color: var(--text-secondary);">No transcript available for this video.</p>';
+                let html = '<p style="color: var(--text-secondary);">No transcript available for this video.</p>';
+                // Check if AI enabled (passed from backend)
+                if ({{ 'true' if ai_enabled else 'false' }}) {
+                    // Check provider type to customize text (would be cleaner to pass var, but we can infer or generic)
+                    // We'll keep it generic but helpful
+                    html += `<div style="text-align:center; margin-top:20px;">
+                        <button class="resume-btn" onclick="generateTranscript('${videoPath}')">✨ Auto-Generate Transcript</button>
+                        <p style="font-size:0.8em; color:var(--text-secondary); margin-top:5px;">Using your configured AI Provider (Gemini or Local)</p>
+                    </div>`;
+                }
+                container.innerHTML = html;
+            });
+        }
+        
+        function generateTranscript(videoPath) {
+            const btn = event.target;
+            const originalText = btn.innerText;
+            btn.innerText = "Processing... (This may take a while)";
+            btn.disabled = true;
+            
+            fetch('/api/generate_transcript', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ video_path: videoPath })
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    Swal.fire('Transcript Generated', data.message, 'success');
+                    loadTranscript(videoPath); // Reload to show it
+                } else {
+                    Swal.fire('Error', "Error: " + data.message, 'error');
+                    btn.innerText = originalText;
+                    btn.disabled = false;
+                }
+            })
+            .catch(err => {
+                Swal.fire('Error', "Error: " + err, 'error');
+                btn.innerText = originalText;
+                btn.disabled = false;
             });
         }
         
@@ -1137,6 +1597,8 @@
             });
         });
 
+        let lastQuizData = null;
+
         function loadQuiz(path) {
             const container = document.getElementById('quiz-container');
             container.innerHTML = 'Loading quiz...';
@@ -1145,11 +1607,16 @@
             // currentVideoPath is like 'CourseName/Module/quiz.json'
             fetch('/quiz/' + path)
             .then(res => res.json())
-            .then(data => renderQuiz(data))
+            .then(data => {
+                lastQuizData = data;
+                renderQuiz(data);
+            })
             .catch(err => container.innerHTML = 'Error loading quiz: ' + err);
         }
         
         function renderQuiz(data) {
+            lastQuizData = data; // Store for repeat
+            document.getElementById('quiz-tab-btn').style.display = 'block';
             const container = document.getElementById('quiz-container');
             container.innerHTML = `<h1>${data.title || 'Quiz'}</h1>`;
             
@@ -1159,6 +1626,7 @@
                 qDiv.innerHTML = `<h3>${idx+1}. ${q.question}</h3>`;
                 const optsDiv = document.createElement('div');
                 optsDiv.className = 'quiz-options';
+                q.options = q.options || []; // Safety
                 q.options.forEach((opt, oIdx) => {
                     const label = document.createElement('label');
                     label.innerHTML = `<input type="radio" name="q${idx}" value="${oIdx}"> ${opt}`;
@@ -1181,7 +1649,38 @@
                 const selected = document.querySelector(`input[name="q${idx}"]:checked`);
                 if (selected && parseInt(selected.value) === q.answer) score++;
             });
-            alert(`You scored ${score} / ${data.questions.length}`);
+
+            // Save to DB
+            fetch('/api/save_quiz_result', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    course_id: courseId,
+                    correct: score,
+                    total: data.questions.length
+                })
+            });
+
+            const container = document.getElementById('quiz-container');
+            container.innerHTML = `
+                <div style="text-align: center; padding: 20px;">
+                    <div style="font-size: 3em;">${score === data.questions.length ? '🎉' : '📊'}</div>
+                    <h2>Quiz Completed!</h2>
+                    <p style="font-size: 1.5em; font-weight: bold; color: var(--primary-color);">
+                        Your Score: ${score} / ${data.questions.length}
+                    </p>
+                    <div style="display: flex; gap: 10px; justify-content: center; margin-top: 20px;">
+                        <button class="resume-btn" onclick="renderQuiz(lastQuizData)" style="margin-top:0;">🔄 Repeat Quiz</button>
+                        ${isAuthenticated && {{ 'true' if ai_enabled else 'false' }} ? `<button class="resume-btn" onclick="triggerAI('quiz')" style="margin-top:0; background:#2e7d32;">✨ Generate New AI Quiz</button>` : ''}
+                    </div>
+                </div>
+            `;
+
+            Swal.fire({
+                title: 'Quiz Result',
+                text: `You scored ${score} / ${data.questions.length}`,
+                icon: score === data.questions.length ? 'success' : 'info'
+            });
         }
         
         function addToPlaylist(e, path, title) {
@@ -1190,27 +1689,48 @@
             .then(res => res.json())
             .then(data => {
                 if (data.length === 0) {
-                    alert("No playlists found. Create one on the homepage first.");
+                    Swal.fire('No Playlists', "No playlists found. Create one on the homepage first.", 'info');
                     return;
                 }
-                let msg = "Enter Playlist ID to add to:\n";
-                data.forEach(p => msg += `[${p.id}] ${p.title}\n`);
-                const pid = prompt(msg);
-                if (pid) {
-                    fetch('/api/add_to_playlist', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            playlist_id: pid,
-                            video_path: path,
-                            video_title: title,
-                            course_id: courseId
-                        })
-                    }).then(() => alert('Added!'));
-                }
+                
+                const inputOptions = {};
+                data.forEach(p => inputOptions[p.id] = p.title);
+
+                Swal.fire({
+                    title: 'Add to Playlist',
+                    input: 'select',
+                    inputOptions: inputOptions,
+                    inputPlaceholder: 'Select a playlist',
+                    showCancelButton: true
+                }).then((result) => {
+                    if (result.isConfirmed && result.value) {
+                        const pid = result.value;
+                        fetch('/api/add_to_playlist', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                playlist_id: pid,
+                                video_path: path,
+                                video_title: title,
+                                course_id: courseId
+                            })
+                        }).then(() => Swal.fire('Added!', 'Video added to playlist.', 'success'));
+                    }
+                });
             });
         }
         
+        function viewDocument(url) {
+            const viewer = document.getElementById('doc-viewer');
+            const placeholder = document.getElementById('doc-placeholder');
+            
+            viewer.src = url;
+            viewer.style.display = 'block';
+            placeholder.style.display = 'none';
+            
+            openTab('docs-tab');
+        }
+
         function renderResources(resources) {
             resourceListUi.innerHTML = '';
             if (resources.length === 0) {
@@ -1220,7 +1740,18 @@
             resources.forEach(res => {
                 const li = document.createElement('li');
                 li.className = 'resource-item';
-                li.innerHTML = `📄 <a href="/course_file/${courseId}/${res.path}" target="_blank">${res.name}</a>`;
+                
+                let viewBtn = '';
+                if (res.name.toLowerCase().endsWith('.pdf')) {
+                    viewBtn = `<button class="btn" style="padding: 2px 8px; font-size: 0.8em; color: var(--primary-color); border-color: var(--primary-color);" onclick="viewDocument('/course_file/${courseId}/${res.path}')">View</button>`;
+                }
+
+                li.innerHTML = `
+                    <div style="display: flex; justify-content: space-between; width: 100%; align-items: center;">
+                        <div>📄 <a href="/course_file/${courseId}/${res.path}" target="_blank">${res.name}</a></div>
+                        ${viewBtn}
+                    </div>
+                `;
                 resourceListUi.appendChild(li);
             });
         }

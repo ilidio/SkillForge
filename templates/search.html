@@ -96,6 +96,21 @@
         {% else %}
             <p>No notes found.</p>
         {% endif %}
+
+        <div class="section-title">Spoken in Videos (Transcripts)</div>
+        {% if results.transcripts %}
+            {% for t in results.transcripts %}
+            <div class="result-item">
+                <a href="/course/{{ t.course_id }}?video={{ t.video_path }}&t={{ t.timestamp }}">
+                    <div class="result-title">{{ t.video_title }}</div>
+                    <div class="result-meta">in {{ t.course_title }} at <b>{{ t.timestamp_str }}</b></div>
+                    <div class="result-match">"...{{ t.snippet }}..."</div>
+                </a>
+            </div>
+            {% endfor %}
+        {% else %}
+            <p>No matches found inside video speech.</p>
+        {% endif %}
     </div>
     
     <script>

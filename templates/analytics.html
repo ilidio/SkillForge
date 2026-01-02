@@ -141,6 +141,44 @@
                 <div class="stat-val">{{ total_completed }}</div>
                 <div class="stat-label">Videos Completed</div>
             </div>
+            <div class="stat-card">
+                <div class="stat-val" style="color: #4caf50;">{{ quiz_correct }} / {{ quiz_total }}</div>
+                <div class="stat-label">Quiz Correct Answers</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-val" style="color: #ffb700;">{{ avg_mastery }} / 5</div>
+                <div class="stat-label">Avg. Confidence ({{ total_rated }} videos)</div>
+            </div>
+        </div>
+
+        <h2>AI Usage Stats</h2>
+        <div class="stats-grid" style="grid-template-columns: repeat(3, 1fr);">
+            <div class="stat-card">
+                <div class="stat-val" style="color: #2196F3;">{{ ai_total }}</div>
+                <div class="stat-label">Total AI Requests</div>
+            </div>
+            <div class="stat-card" style="text-align: left;">
+                <div class="stat-label" style="margin-bottom: 10px; font-weight: bold; color: var(--text-main);">By Provider</div>
+                {% for prov, count in ai_by_provider.items() %}
+                <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                    <span style="text-transform: capitalize;">{{ prov }}</span>
+                    <span style="font-weight: bold;">{{ count }}</span>
+                </div>
+                {% else %}
+                <div style="color: var(--text-secondary); font-size: 0.9em;">No usage yet</div>
+                {% endfor %}
+            </div>
+            <div class="stat-card" style="text-align: left;">
+                <div class="stat-label" style="margin-bottom: 10px; font-weight: bold; color: var(--text-main);">By Action</div>
+                {% for act, count in ai_by_action.items() %}
+                <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                    <span style="text-transform: capitalize;">{{ act }}</span>
+                    <span style="font-weight: bold;">{{ count }}</span>
+                </div>
+                {% else %}
+                <div style="color: var(--text-secondary); font-size: 0.9em;">No usage yet</div>
+                {% endfor %}
+            </div>
         </div>
 
         <h2>Achievements</h2>
@@ -203,13 +241,23 @@
                     const data = activityData[dateStr];
                     
                     if (data) {
-                        const secs = data.seconds;
-                        if (secs > 3600) box.classList.add('l4');
-                        else if (secs > 1800) box.classList.add('l3');
-                        else if (secs > 600) box.classList.add('l2');
-                        else if (secs > 0) box.classList.add('l1');
+                        const mins = Math.round(data.seconds / 60);
+                        const vids = data.count || 0;
+                        const ai = data.ai_count || 0;
                         
-                        box.title = `${dateStr}: ${Math.round(secs/60)} mins`;
+                        // Level calculation based on watch time
+                        if (data.seconds > 3600) box.classList.add('l4');
+                        else if (data.seconds > 1800) box.classList.add('l3');
+                        else if (data.seconds > 600) box.classList.add('l2');
+                        else if (data.seconds > 0 || ai > 0) box.classList.add('l1');
+                        
+                        let tooltip = `${dateStr}\n`;
+                        if (mins > 0) tooltip += `• ${mins} mins watched\n`;
+                        if (vids > 0) tooltip += `• ${vids} videos completed\n`;
+                        if (ai > 0) tooltip += `• ${ai} AI requests\n`;
+                        if (mins === 0 && vids === 0 && ai === 0) tooltip += `No activity`;
+                        
+                        box.title = tooltip.trim();
                     } else {
                         box.title = `${dateStr}: No activity`;
                     }

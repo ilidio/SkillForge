@@ -6,6 +6,8 @@
     <title>Settings - SkillForge</title>
     <!-- Quill CSS -->
     <link href="https://cdn.quilljs.com/1.3.6/quill.snow.css" rel="stylesheet">
+    <!-- SweetAlert2 -->
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
     <style>
         :root {
             --bg-body: #f7f9fa;
@@ -31,6 +33,22 @@
             --primary-color: #cf9fff;
             --hover-bg: #3e4143;
             --progress-bg: #3e4143;
+        }
+        
+        /* SweetAlert2 Theme Overrides */
+        .swal2-popup {
+            background-color: var(--bg-card) !important;
+            color: var(--text-main) !important;
+            border: 1px solid var(--border-color);
+        }
+        .swal2-title, .swal2-content, .swal2-html-container {
+            color: var(--text-main) !important;
+        }
+        .swal2-confirm {
+            background-color: var(--primary-color) !important;
+        }
+        .swal2-cancel {
+            background-color: #6e7881 !important;
         }
         
         /* Quill Dark Mode Overrides */
@@ -266,6 +284,54 @@
             </div>
         </div>
 
+        <div class="global-actions" style="border-color: #2196F3; background: var(--bg-card);">
+            <div>
+                <div class="danger-label" style="color: #2196F3;">AI Configuration</div>
+                <div style="font-size: 0.9em; color: var(--text-secondary); margin-top: 4px;">Configure Gemini AI for enhanced features.</div>
+            </div>
+            <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                <label style="display: flex; align-items: center; cursor: pointer; user-select: none; margin-right: 10px;">
+                    <input type="checkbox" id="aiEnabled" {% if ai_enabled %}checked{% endif %} style="margin-right: 5px;"> Enable AI
+                </label>
+
+                <select id="aiProvider" style="padding: 8px; border: 1px solid var(--border-color); border-radius: 4px;" onchange="toggleProviderFields()">
+                    <option value="gemini" {% if ai_provider == 'gemini' %}selected{% endif %}>Gemini (Cloud)</option>
+                    <option value="local" {% if ai_provider == 'local' %}selected{% endif %}>Local AI (LM Studio/Ollama)</option>
+                </select>
+            
+                <div id="geminiFields" style="display: {% if ai_provider == 'gemini' %}flex{% else %}none{% endif %}; gap: 10px; align-items: center;">
+                    <input type="password" id="geminiApiKey" placeholder="Gemini API Key" value="{{ api_key }}" style="padding: 8px; border: 1px solid var(--border-color); border-radius: 4px; width: 200px;">
+                    
+                    <div style="display: flex; gap: 5px; align-items: center;">
+                        <select id="geminiModel" style="padding: 8px; border: 1px solid var(--border-color); border-radius: 4px; min-width: 150px;">
+                            <option value="{{ selected_model }}" selected>{{ selected_model }} (Saved)</option>
+                        </select>
+                        <button class="btn" onclick="fetchModels()" title="Refresh Models from API" style="padding: 8px;">↻</button>
+                    </div>
+                </div>
+
+                <div id="localFields" style="display: {% if ai_provider == 'local' %}flex{% else %}none{% endif %}; gap: 10px; align-items: center; flex-wrap: wrap;">
+                    <input type="text" id="localAiUrl" placeholder="Chat URL (e.g. localhost:1234/v1/chat/completions)" value="{{ local_ai_url }}" style="padding: 8px; border: 1px solid var(--border-color); border-radius: 4px; width: 300px;">
+                    <input type="text" id="localWhisperUrl" placeholder="STT URL (e.g. localhost:9000/v1/audio/transcriptions)" value="{{ local_whisper_url }}" style="padding: 8px; border: 1px solid var(--border-color); border-radius: 4px; width: 300px;">
+                    <input type="text" id="localModel" placeholder="Model Identifier" value="{{ selected_model if ai_provider == 'local' else '' }}" style="padding: 8px; border: 1px solid var(--border-color); border-radius: 4px; width: 150px;">
+                </div>
+
+                <button class="btn" onclick="saveAIConfig()" style="color: #2196F3; border-color: #2196F3;">Save Config</button>
+                <button class="btn" onclick="testAI()">Test AI</button>
+            </div>
+        </div>
+
+        <div class="global-actions" style="border-color: #4caf50; background: var(--bg-card);">
+            <div>
+                <div class="danger-label" style="color: #4caf50;">Learning Performance</div>
+                <div style="font-size: 0.9em; color: var(--text-secondary); margin-top: 4px;">Your overall knowledge retention based on quizzes.</div>
+            </div>
+            <div style="text-align: right;">
+                <div style="font-size: 1.5em; font-weight: bold; color: var(--text-main);">{{ quiz_correct }} / {{ quiz_total }}</div>
+                <div style="font-size: 0.8em; color: var(--text-secondary);">Correct Answers</div>
+            </div>
+        </div>
+
         <div class="global-actions">
             <div>
                 <div class="danger-label">Global Reset</div>
@@ -455,24 +521,33 @@
         }
         
         function resetVideoProgress(courseId, videoPath, rowElement) {
-            if (!confirm('Reset progress for this video?')) return;
-            
-            fetch('/api/reset_progress', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ video_path: videoPath }),
-            })
-            .then(res => res.json())
-            .then(data => {
-                if (data.status === 'success') {
-                    // Update UI row to reflect reset
-                    const statusDiv = rowElement.querySelector('div > div:nth-child(2)');
-                    statusDiv.innerHTML = '<span style="color: var(--text-secondary);">Not Started</span>';
-                    const btn = rowElement.querySelector('button');
-                    btn.disabled = true;
-                    btn.style.opacity = '0.5';
-                    btn.style.cursor = 'default';
-                    btn.style.borderColor = 'transparent';
+            Swal.fire({
+                title: 'Reset Progress?',
+                text: 'Reset progress for this video?',
+                icon: 'warning',
+                showCancelButton: true,
+                confirmButtonText: 'Yes, reset it!',
+                confirmButtonColor: '#d33'
+            }).then((result) => {
+                if (result.isConfirmed) {
+                    fetch('/api/reset_progress', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ video_path: videoPath }),
+                    })
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.status === 'success') {
+                            // Update UI row to reflect reset
+                            const statusDiv = rowElement.querySelector('div > div:nth-child(2)');
+                            statusDiv.innerHTML = '<span style="color: var(--text-secondary);">Not Started</span>';
+                            const btn = rowElement.querySelector('button');
+                            btn.disabled = true;
+                            btn.style.opacity = '0.5';
+                            btn.style.cursor = 'default';
+                            btn.style.borderColor = 'transparent';
+                        }
+                    });
                 }
             });
         }
@@ -504,11 +579,12 @@
             .then(response => response.json())
             .then(data => {
                 if (data.status === 'success') {
-                    alert('Details saved!');
-                    closeEditor();
-                    location.reload(); // Reload to update local data context
+                    Swal.fire('Saved!', 'Details saved!', 'success').then(() => {
+                        closeEditor();
+                        location.reload(); 
+                    });
                 } else {
-                    alert('Error saving details');
+                    Swal.fire('Error', 'Error saving details', 'error');
                 }
             });
         }
@@ -522,41 +598,67 @@
             const file = input.files[0];
             if (!file) return;
             
-            if (!confirm('This will merge the backup data with your current progress. Continue?')) {
-                input.value = '';
-                return;
-            }
-            
-            const formData = new FormData();
-            formData.append('file', file);
-            
-            fetch('/api/restore', {
-                method: 'POST',
-                body: formData
-            })
-            .then(res => res.json())
-            .then(data => {
-                if (data.status === 'success') {
-                    alert('Restore successful!');
-                    window.location.reload();
+            Swal.fire({
+                title: 'Import Data?',
+                text: 'This will merge the backup data with your current progress. Continue?',
+                icon: 'question',
+                showCancelButton: true,
+                confirmButtonText: 'Yes, merge it'
+            }).then((result) => {
+                if (result.isConfirmed) {
+                    const formData = new FormData();
+                    formData.append('file', file);
+                    
+                    fetch('/api/restore', {
+                        method: 'POST',
+                        body: formData
+                    })
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.status === 'success') {
+                            Swal.fire('Success!', 'Restore successful!', 'success').then(() => {
+                                window.location.reload();
+                            });
+                        } else {
+                            Swal.fire('Error', 'Error: ' + data.message, 'error');
+                        }
+                    })
+                    .catch(err => Swal.fire('Error', 'Error: ' + err, 'error'));
                 } else {
-                    alert('Error: ' + data.message);
+                    input.value = '';
                 }
-            })
-            .catch(err => alert('Error: ' + err));
+            });
         }
 
         // Reset Functions
         function resetProgress(courseId) {
-            if (confirm('Are you sure you want to reset progress for this specific course?')) {
-                performReset(courseId);
-            }
+            Swal.fire({
+                title: 'Reset Course?',
+                text: 'Are you sure you want to reset progress for this specific course?',
+                icon: 'warning',
+                showCancelButton: true,
+                confirmButtonColor: '#d33',
+                confirmButtonText: 'Yes, reset course'
+            }).then((result) => {
+                if (result.isConfirmed) {
+                    performReset(courseId);
+                }
+            });
         }
 
         function resetAllProgress() {
-            if (confirm('WARNING: Are you sure you want to reset progress for ALL courses? This cannot be undone.')) {
-                performReset('all');
-            }
+            Swal.fire({
+                title: 'Global Reset?',
+                text: 'WARNING: Are you sure you want to reset progress for ALL courses? This cannot be undone.',
+                icon: 'error',
+                showCancelButton: true,
+                confirmButtonColor: '#d33',
+                confirmButtonText: 'Yes, RESET EVERYTHING'
+            }).then((result) => {
+                if (result.isConfirmed) {
+                    performReset('all');
+                }
+            });
         }
 
         function performReset(id) {
@@ -572,6 +674,159 @@
                 }
             });
         }
+
+        function toggleProviderFields() {
+            const provider = document.getElementById('aiProvider').value;
+            document.getElementById('geminiFields').style.display = provider === 'gemini' ? 'flex' : 'none';
+            document.getElementById('localFields').style.display = provider === 'local' ? 'flex' : 'none';
+        }
+
+        function saveAIConfig() {
+            const provider = document.getElementById('aiProvider').value;
+            const key = document.getElementById('geminiApiKey').value.trim();
+            const model = provider === 'gemini' ? document.getElementById('geminiModel').value : document.getElementById('localModel').value;
+            const localUrl = document.getElementById('localAiUrl').value.trim();
+            const localWhisperUrl = document.getElementById('localWhisperUrl').value.trim();
+            const enabled = document.getElementById('aiEnabled').checked ? 'true' : 'false';
+            
+            if (enabled === 'true') {
+                if (provider === 'gemini' && !key) {
+                    Swal.fire('Required', 'Please enter an API Key for Gemini.', 'warning');
+                    return;
+                }
+                if (provider === 'local' && !localUrl) {
+                    Swal.fire('Required', 'Please enter a Server URL for Local AI.', 'warning');
+                    return;
+                }
+            }
+            
+            const promises = [];
+            
+            promises.push(fetch('/api/save_settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ key: 'ai_provider', value: provider }),
+            }));
+
+            if (key) {
+                promises.push(fetch('/api/save_settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ key: 'gemini_api_key', value: key }),
+                }));
+            }
+            
+            promises.push(fetch('/api/save_settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ key: 'gemini_model', value: model }),
+            }));
+
+            promises.push(fetch('/api/save_settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ key: 'local_ai_url', value: localUrl }),
+            }));
+
+            promises.push(fetch('/api/save_settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ key: 'local_whisper_url', value: localWhisperUrl }),
+            }));
+
+            promises.push(fetch('/api/save_settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ key: 'ai_features_enabled', value: enabled }),
+            }));
+            
+            Promise.all(promises)
+                .then(responses => Promise.all(responses.map(r => r.json())))
+                .then(data => {
+                    const allSuccess = data.every(d => d.status === 'success');
+                    if (allSuccess) {
+                        Swal.fire('Saved!', 'AI Configuration saved successfully!', 'success');
+                    } else {
+                        Swal.fire('Error', 'Error saving configuration.', 'error');
+                    }
+                })
+                .catch(err => Swal.fire('Error', 'Error: ' + err, 'error'));
+        }
+
+        function testAI() {
+            const btn = event.target;
+            const originalText = btn.innerText;
+            const provider = document.getElementById('aiProvider').value;
+            const model = provider === 'gemini' ? document.getElementById('geminiModel').value : document.getElementById('localModel').value;
+            
+            btn.innerText = 'Testing...';
+            btn.disabled = true;
+            
+            fetch('/api/ai_chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ prompt: "Hello! Confirm you are working and which model you are.", model: model }),
+            })
+            .then(res => res.json())
+            .then(data => {
+                btn.innerText = originalText;
+                btn.disabled = false;
+                
+                if (data.status === 'success') {
+                    Swal.fire('AI Success', 'AI Response: ' + data.response, 'success');
+                } else {
+                    Swal.fire('AI Error', 'AI Error: ' + data.message, 'error');
+                }
+            })
+            .catch(err => {
+                btn.innerText = originalText;
+                btn.disabled = false;
+                Swal.fire('Request Failed', 'Request failed: ' + err, 'error');
+            });
+        }
+        
+        function fetchModels() {
+            const select = document.getElementById('geminiModel');
+            const currentVal = select.value;
+            select.innerHTML = '<option>Loading...</option>';
+            select.disabled = true;
+            
+            fetch('/api/get_models')
+            .then(res => res.json())
+            .then(data => {
+                select.innerHTML = '';
+                select.disabled = false;
+                
+                if (data.models && data.models.length > 0) {
+                    data.models.forEach(m => {
+                        const opt = document.createElement('option');
+                        opt.value = m;
+                        opt.innerText = m;
+                        if (m === currentVal) opt.selected = true;
+                        select.appendChild(opt);
+                    });
+                    
+                    // If current value is not in the list (e.g. deprecated or first load), keep it as an option or default to first
+                    if (currentVal && !data.models.includes(currentVal)) {
+                         const opt = document.createElement('option');
+                         opt.value = currentVal;
+                         opt.innerText = currentVal + " (Saved)";
+                         opt.selected = true;
+                         select.appendChild(opt);
+                    }
+                } else {
+                    select.innerHTML = '<option value="">No models found</option>';
+                }
+            })
+            .catch(err => {
+                select.innerHTML = `<option value="${currentVal}">${currentVal} (Error loading list)</option>`;
+                select.disabled = false;
+                console.error(err);
+            });
+        }
+        
+        // Load models on page load
+        document.addEventListener('DOMContentLoaded', fetchModels);
     </script>
 </body>
 </html>

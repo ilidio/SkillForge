@@ -1,6 +1,27 @@
-
+# System
 .DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual Environments
 venv/
+venv-whisper/
+env/
+.env
+
+# Database & Sensitive Data
+*.db
+*.sqlite3
+instance/
+
+# Content & Media
 courses/
- __pycache__/
- courses.db
+temp/
+
+# Logs
+*.log
