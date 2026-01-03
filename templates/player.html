@@ -9,6 +9,8 @@
     <!-- Mermaid.js -->
     <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
     <script>mermaid.initialize({ startOnLoad: false, theme: 'dark' });</script>
+    <!-- D3.js -->
+    <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
     <style>
         /* SweetAlert2 Theme Overrides */
         .swal2-popup {
@@ -33,6 +35,7 @@
 
         :root {
             --bg-body: #f7f9fa;
+            --bg-card: #ffffff;
             --bg-sidebar: #ffffff;
             --bg-header: #f7f9fa;
             --text-main: #2d2f31;
@@ -49,6 +52,7 @@
 
         [data-theme="dark"] {
             --bg-body: #1c1d1f;
+            --bg-card: #2d2f31;
             --bg-sidebar: #2d2f31;
             --bg-header: #1c1d1f;
             --text-main: #e0e0e0;
@@ -67,11 +71,28 @@
             margin: 0;
             padding: 0;
             display: flex;
+            flex-direction: column;
             height: 100vh;
             color: var(--text-main);
             background-color: var(--bg-body);
             overflow: hidden;
             transition: background-color 0.3s, color 0.3s;
+        }
+
+        .player-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 20px;
+            background-color: var(--bg-header);
+            border-bottom: 1px solid var(--border-color);
+            z-index: 100;
+        }
+
+        .app-content {
+            flex: 1;
+            display: flex;
+            overflow: hidden;
         }
 
         /* Main Area (Video + Tabs) */
@@ -93,41 +114,49 @@
         }
 
         .back-link {
-            position: absolute;
-            top: 20px;
-            left: 20px;
-            color: white;
+            color: var(--text-main);
             text-decoration: none;
-            background: rgba(0,0,0,0.5);
             padding: 8px 12px;
             border-radius: 4px;
-            z-index: 10;
             display: flex;
             align-items: center;
             gap: 10px;
         }
         
         .logo-img { height: 20px; width: auto; }
+        .logo-light { display: block; }
+        .logo-dark { display: none; }
+        .logo-mobile-light { display: none; }
+        .logo-mobile-dark { display: none; }
+
+        [data-theme="dark"] .logo-light { display: none; }
+        [data-theme="dark"] .logo-dark { display: block; }
+
+        @media (max-width: 768px) {
+            .back-link .logo-light, .back-link .logo-dark { display: none !important; }
+            .back-link .logo-mobile-light { display: block; height: 25px; width: auto; }
+            [data-theme="dark"] .back-link .logo-mobile-light { display: none; }
+            [data-theme="dark"] .back-link .logo-mobile-dark { display: block; height: 25px; width: auto; }
+        }
         
         .top-controls {
-            position: absolute;
-            top: 20px;
-            right: 20px;
             display: flex;
             gap: 10px;
-            z-index: 10;
         }
 
         .control-btn {
-            background: rgba(0,0,0,0.5);
-            border: none;
+            background: none;
+            border: 1px solid var(--border-color);
             cursor: pointer;
             font-size: 1.2em;
             padding: 8px 12px;
             border-radius: 4px;
-            color: white;
+            color: var(--text-main);
             transition: background 0.2s;
             text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 5px;
         }
         .control-btn:hover { background: rgba(0,0,0,0.7); }
         .control-btn.active-speed {
@@ -225,6 +254,11 @@
             color: var(--text-main);
             border-bottom-color: var(--tab-active-border);
         }
+
+        @media (max-width: 1000px) {
+            .tab-text { display: none; }
+            .tab-btn { padding: 12px 15px; font-size: 1.2em; }
+        }
         
         .tab-content {
             flex: 1;
@@ -283,9 +317,22 @@
         }
         
         .sidebar.minimized .sidebar-header span,
+        .sidebar.minimized .sidebar-header div > button:not(:last-child),
         .sidebar.minimized .module-title,
+        .sidebar.minimized .sidebar-search,
         .sidebar.minimized .video-item-content {
             display: none;
+        }
+        
+        .sidebar.minimized .sidebar-header {
+            justify-content: center;
+            padding: 16px 0;
+        }
+        
+        .sidebar.minimized .sidebar-header div {
+            width: 100%;
+            display: flex;
+            justify-content: center;
         }
         
         .sidebar-header {
@@ -299,6 +346,14 @@
             justify-content: space-between;
             align-items: center;
             height: 24px;
+            gap: 10px;
+        }
+        
+        .sidebar-header span {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            flex: 1;
         }
         
         .sidebar-toggle-btn {
@@ -591,6 +646,76 @@
             text-decoration: underline;
         }
         .jump-link:hover { color: var(--text-main); }
+
+        /* Player Hamburger Menu */
+        .player-hamburger-btn {
+            display: none;
+            background: rgba(0,0,0,0.5);
+            border: 1px solid rgba(255,255,255,0.3);
+            padding: 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            color: white;
+            font-size: 1.2em;
+            z-index: 1001;
+        }
+
+        .player-mobile-menu {
+            display: none;
+            position: fixed;
+            top: 0;
+            right: 0;
+            bottom: 0;
+            width: 250px;
+            background: var(--bg-card);
+            z-index: 2500;
+            padding: 20px;
+            box-shadow: -5px 0 15px rgba(0,0,0,0.2);
+            border-left: 1px solid var(--border-color);
+            flex-direction: column;
+            gap: 10px;
+        }
+        .player-mobile-menu.open { display: flex; }
+        .player-menu-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 2450;
+        }
+        .player-menu-overlay.open { display: block; }
+        .player-mobile-menu .control-btn {
+            width: 100%;
+            justify-content: flex-start;
+            color: var(--text-main);
+            background: none;
+            border: 1px solid var(--border-color);
+            padding: 12px;
+            gap: 10px;
+        }
+
+        .user-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: var(--primary-color);
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            overflow: hidden;
+            border: 2px solid rgba(255,255,255,0.3);
+        }
+        .user-avatar img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        @media (max-width: 1000px) {
+            .user-name-text { display: none; }
+        }
         
         /* Toast Notification */
         .toast {
@@ -624,52 +749,92 @@
         .toast-content { display: flex; flex-direction: column; }
         .toast-title { font-weight: bold; }
         .toast-desc { font-size: 0.85em; color: var(--text-secondary); }
+
+        /* Responsive Player Adjustments */
+        @media (max-width: 1024px) {
+            :root { --sidebar-width: 280px; }
+        }
+
+        @media (max-width: 1000px) {
+            .user-name-text { display: none; }
+        }
+
+        @media (max-width: 768px) {
+            body { overflow-y: auto; height: auto; }
+            .app-content { flex-direction: column; overflow: visible; height: auto; }
+            .sidebar { width: 100% !important; border-left: none; border-top: 1px solid var(--border-color); height: 50vh; }
+            .video-area { min-height: 300px; height: 56.25vw; } /* 16:9 ratio */
+            .tabs-container { height: 500px !important; }
+            .player-header { padding: 10px; }
+            .top-controls { gap: 5px; }
+            .control-btn { padding: 6px 10px; }
+            .control-text, .user-label .user-name-text { display: none; }
+            .speed-bar { display: none !important; }
+            .top-controls .control-btn:not(.player-hamburger-btn) { display: none; }
+            .player-hamburger-btn { display: block; }
+        }
     </style>
 </head>
 <body>
+    <header class="player-header">
+        <a href="/" class="back-link" title="Return to Dashboard">
+            <span>←</span>
+            <img src="/static/images/logo.png" alt="SkillForge" class="logo-img logo-light">
+            <img src="/static/images/logo_dark.png" alt="SkillForge" class="logo-img logo-dark">
+            <img src="/static/images/logo_mobile.png" alt="SkillForge" class="logo-img logo-mobile-light">
+            <img src="/static/images/logo_dark_mobile.png" alt="SkillForge" class="logo-img logo-mobile-dark">
+        </a>
 
-    <div class="main-container">
-        <div class="video-area">
-            <a href="/" class="back-link">
-                <span>←</span>
-                <img src="/static/images/logo_dark.png" alt="SkillForge" class="logo-img">
-            </a>
-            
-            <div class="top-controls">
-                {% if current_user.is_authenticated %}
-                    <span style="color: white; margin-right: 15px; align-self: center;">{{ current_user.name }}</span>
-                {% else %}
-                    <a href="/login" style="color: white; margin-right: 15px; align-self: center; text-decoration: none;">Login</a>
-                {% endif %}
-                
-                {% if is_completed %}
-                <a href="/certificate/{{ course.id }}" class="control-btn" style="background: #ffb700; color: #000; text-decoration: none; font-weight: bold;">🏆 Certificate</a>
-                {% endif %}
-                
-                <div style="display: flex; gap: 5px; background: rgba(0,0,0,0.5); padding: 4px; border-radius: 4px;">
-                    <button class="control-btn speed-btn" onclick="setSpeed(1)" title="Normal Speed" style="font-size: 0.8em; padding: 4px 8px;">1x</button>
-                    <button class="control-btn speed-btn" onclick="setSpeed(1.5)" title="1.5x Speed" style="font-size: 0.8em; padding: 4px 8px;">1.5x</button>
-                    <button class="control-btn speed-btn" onclick="setSpeed(2)" title="2x Speed" style="font-size: 0.8em; padding: 4px 8px;">2x</button>
-                    <button class="control-btn speed-btn" onclick="setSpeed(2.5)" title="2.5x Speed" style="font-size: 0.8em; padding: 4px 8px;">2.5x</button>
-                    <button class="control-btn speed-btn" onclick="setSpeed(3)" title="3x Speed" style="font-size: 0.8em; padding: 4px 8px;">3x</button>
+        <div class="top-controls">
+            {% if current_user.is_authenticated %}
+                <div class="user-label" style="display: flex; align-items: center; gap: 10px; margin-right: 15px;">
+                    <div class="user-avatar" title="{{ current_user.name }}">
+                        {% if current_user.profile_pic %}
+                            <img src="{{ current_user.profile_pic }}" alt="Avatar">
+                        {% else %}
+                            {{ current_user.name[0] | upper }}
+                        {% endif %}
+                    </div>
+                    <span class="user-name-text" style="align-self: center;">{{ current_user.name }}</span>
                 </div>
+            {% else %}
+                <a href="/login" class="user-label" style="margin-right: 15px; align-self: center; text-decoration: none;">Login</a>
+            {% endif %}
+            
+            {% if is_completed %}
+            <a href="/certificate/{{ course.id }}" class="control-btn" style="background: #ffb700; color: #000; text-decoration: none; font-weight: bold;">🏆 <span class="control-text">Certificate</span></a>
+            {% endif %}
+            
+            <div class="speed-bar" style="display: flex; gap: 5px; background: rgba(0,0,0,0.05); padding: 4px; border-radius: 4px; border: 1px solid var(--border-color);">
+                <button class="control-btn speed-btn" onclick="setSpeed(1)" title="1x Speed" style="font-size: 0.8em; padding: 4px 8px; border:none;">1x</button>
+                <button class="control-btn speed-btn" onclick="setSpeed(1.5)" title="1.5x Speed" style="font-size: 0.8em; padding: 4px 8px; border:none;">1.5x</button>
+                <button class="control-btn speed-btn" onclick="setSpeed(2)" title="2x Speed" style="font-size: 0.8em; padding: 4px 8px; border:none;">2x</button>
+                <button class="control-btn speed-btn" onclick="setSpeed(2.5)" title="2.5x Speed" style="font-size: 0.8em; padding: 4px 8px; border:none;">2.5x</button>
+                <button class="control-btn speed-btn" onclick="setSpeed(3)" title="3x Speed" style="font-size: 0.8em; padding: 4px 8px; border:none;">3x</button>
+            </div>
 
-                <button class="control-btn cinema-btn" onclick="toggleCinemaMode()" title="Cinema Mode (Lights Off)">💡</button>
-                <button class="control-btn" id="rate-btn" onclick="openMastery()" title="Rate Mastery" style="display: none;">⭐ Rate</button>
-                <button class="control-btn" onclick="openInfo()" title="Course Info">ⓘ Info</button>
-                <button class="control-btn" onclick="toggleTheme()" title="Toggle Dark Mode">🌓</button>
-            </div>
-            
-            <div id="placeholder" class="video-placeholder">
-                <h2>Select a video to start learning</h2>
-                <div id="resume-container" style="display: none;">
-                    <button id="resume-btn" class="resume-btn">Resume Learning</button>
+            <button class="control-btn cinema-btn" onclick="toggleCinemaMode()" title="Cinema Mode (Lights Off)">💡</button>
+            <button class="control-btn" onclick="takeSnapshot()" title="Capture Frame to Notes">📸</button>
+            <button class="control-btn" id="rate-btn" onclick="openMastery()" title="Rate Mastery" style="display: none;">⭐ <span class="control-text">Rate</span></button>
+            <button class="control-btn" onclick="openInfo()" title="Course Info">ⓘ <span class="control-text">Info</span></button>
+            <button class="control-btn" onclick="toggleTheme()" title="Toggle Dark Mode">🌓</button>
+            <button class="player-hamburger-btn" onclick="togglePlayerMenu()">☰</button>
+        </div>
+    </header>
+
+    <div class="app-content">
+        <div class="main-container">
+            <div class="video-area">
+                <div id="placeholder" class="video-placeholder">
+                    <h2>Select a video to start learning</h2>
+                    <div id="resume-container" style="display: none;">
+                        <button id="resume-btn" class="resume-btn">Resume Learning</button>
+                    </div>
                 </div>
-            </div>
-            <video id="player" controls style="display: none;">
-                <track id="subtitles" kind="captions" label="English" srclang="en" default>
-                Your browser does not support the video tag.
-            </video>
+                <video id="player" controls style="display: none;">
+                    <track id="subtitles" kind="captions" label="English" srclang="en" default>
+                    Your browser does not support the video tag.
+                </video>
 
             <style>
                 .star-rating { display: flex; gap: 10px; cursor: pointer; justify-content: center; padding: 20px 0; }
@@ -711,14 +876,16 @@
         <div class="tabs-container" id="tabsContainer">
             <div class="tabs-header">
                 <div class="tab-buttons">
-                    <button class="tab-btn active" onclick="openTab('notes')">📝 My Notes</button>
-                    <button class="tab-btn" onclick="openTab('resources')">📂 Resources</button>
-                    <button class="tab-btn" onclick="openTab('transcript')">📜 Transcript</button>
-                    <button class="tab-btn" onclick="openTab('docs-tab')">📄 Documents</button>
-                    <button class="tab-btn" onclick="openTab('flashcards')">🧠 Flashcards</button>
-                    <button class="tab-btn" id="quiz-tab-btn" onclick="openTab('quiz-tab')" style="display: none;">📝 Quiz</button>
+                    <button class="tab-btn active" onclick="openTab('notes')" title="My Notes">📝 <span class="tab-text">My Notes</span></button>
+                    <button class="tab-btn" onclick="openTab('resources')" title="Resources">📂 <span class="tab-text">Resources</span></button>
+                    <button class="tab-btn" onclick="openTab('transcript')" title="Transcript">📜 <span class="tab-text">Transcript</span></button>
+                    <button class="tab-btn" onclick="openTab('chapters-tab')" title="Chapters">🎞️ <span class="tab-text">Chapters</span></button>
+                    <button class="tab-btn" onclick="openTab('docs-tab')" title="Documents">📄 <span class="tab-text">Documents</span></button>
+                    <button class="tab-btn" onclick="openTab('knowledge-map-tab')" title="Knowledge Map">🕸️ <span class="tab-text">Knowledge Map</span></button>
+                    <button class="tab-btn" onclick="openTab('flashcards')" title="Flashcards">🧠 <span class="tab-text">Flashcards</span></button>
+                    <button class="tab-btn" id="quiz-tab-btn" onclick="openTab('quiz-tab')" style="display: none;" title="Quiz">📝 <span class="tab-text">Quiz</span></button>
                     {% if ai_enabled %}
-                    <button class="tab-btn" onclick="openTab('ai-assistant')">✨ AI Assistant</button>
+                    <button class="tab-btn" onclick="openTab('ai-assistant')" title="AI Assistant">✨ <span class="tab-text">AI Assistant</span></button>
                     {% endif %}
                 </div>
                 <button class="toggle-tabs-btn" onclick="toggleTabs()" title="Minimize/Maximize">
@@ -760,11 +927,24 @@
                     <p style="color: var(--text-secondary);">Select a video with subtitles to view transcript.</p>
                 </div>
             </div>
+            <div id="chapters-tab" class="tab-content">
+                <div class="notes-toolbar">
+                    {% if ai_enabled %}
+                    <button class="timestamp-btn" onclick="generateChapters()" style="width: 100%;">✨ Auto-Generate Chapters (AI)</button>
+                    {% endif %}
+                </div>
+                <div id="chapters-container" style="margin-top: 15px;">
+                    <p style="color: var(--text-secondary);">No chapters indexed yet.</p>
+                </div>
+            </div>
             <div id="docs-tab" class="tab-content" style="padding: 0; overflow: hidden;">
                 <iframe id="doc-viewer" style="width: 100%; height: 100%; border: none; display: none;"></iframe>
                 <div id="doc-placeholder" style="display: flex; align-items: center; justify-content: center; height: 100%; color: var(--text-secondary);">
                     Select a PDF from Resources to view here.
                 </div>
+            </div>
+            <div id="knowledge-map-tab" class="tab-content" style="padding: 0; overflow: hidden;">
+                <div id="knowledge-graph" style="width: 100%; height: 100%; cursor: grab;"></div>
             </div>
             <div id="flashcards" class="tab-content">
                 <div style="display: flex; flex-direction: column; gap: 10px; height: 100%;">
@@ -823,10 +1003,12 @@
 
     <div class="sidebar" id="sidebar">
         <div class="sidebar-header">
-            <span>{{ course.title }}</span>
+            <span title="{{ course.title }}">{{ course.title }}</span>
             <div style="display:flex; gap:5px;">
                 {% if ai_enabled %}
+                <button class="sidebar-toggle-btn" onclick="openCourseTutor()" title="Ask the whole Course" style="color: #4caf50;">🤖</button>
                 <button class="sidebar-toggle-btn" onclick="generateStudyPlan()" title="Generate AI Study Plan" style="color: var(--primary-color);">📅</button>
+                <button class="sidebar-toggle-btn" onclick="generateCourseBible()" title="Generate Course Bible (Study Guide)" style="color: #ffb700;">📚</button>
                 {% endif %}
                 <button class="sidebar-toggle-btn" onclick="toggleSidebar()" title="Toggle Sidebar">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1003,10 +1185,185 @@
             if (tabName === 'notes') document.querySelectorAll('.tab-btn')[0].classList.add('active');
             if (tabName === 'resources') document.querySelectorAll('.tab-btn')[1].classList.add('active');
             if (tabName === 'transcript') document.querySelectorAll('.tab-btn')[2].classList.add('active');
-            if (tabName === 'docs-tab') document.querySelectorAll('.tab-btn')[3].classList.add('active');
-            if (tabName === 'flashcards') document.querySelectorAll('.tab-btn')[4].classList.add('active');
+            if (tabName === 'chapters-tab') document.querySelectorAll('.tab-btn')[3].classList.add('active');
+            if (tabName === 'docs-tab') document.querySelectorAll('.tab-btn')[4].classList.add('active');
+            if (tabName === 'knowledge-map-tab') {
+                document.querySelectorAll('.tab-btn')[5].classList.add('active');
+                renderKnowledgeMap();
+            }
+            if (tabName === 'flashcards') document.querySelectorAll('.tab-btn')[6].classList.add('active');
             if (tabName === 'quiz-tab') document.getElementById('quiz-tab-btn').classList.add('active');
             if (tabName === 'ai-assistant') document.querySelectorAll('.tab-btn')[document.querySelectorAll('.tab-btn').length - 1].classList.add('active');
+        }
+
+        // --- Knowledge Map Logic ---
+        function renderKnowledgeMap() {
+            const container = document.getElementById('knowledge-graph');
+            container.innerHTML = ''; // Clear
+            
+            // Gather data from Sidebar
+            const nodes = [];
+            const links = [];
+            
+            const videoItems = document.querySelectorAll('.video-item');
+            videoItems.forEach((item, idx) => {
+                const title = item.getAttribute('data-title');
+                const score = parseInt(item.getAttribute('data-mastery') || '0');
+                const path = item.getAttribute('data-raw-path');
+                
+                nodes.push({
+                    id: path,
+                    name: title,
+                    score: score,
+                    group: item.getAttribute('data-module')
+                });
+                
+                // Link to previous video in same module
+                if (idx > 0) {
+                    const prev = videoItems[idx-1];
+                    if (prev.getAttribute('data-module') === item.getAttribute('data-module')) {
+                        links.push({ source: prev.getAttribute('data-raw-path'), target: path });
+                    }
+                }
+            });
+
+            const width = container.clientWidth;
+            const height = 400; // Fixed height for tab area
+
+            const svg = d3.select("#knowledge-graph")
+                .append("svg")
+                .attr("width", "100%")
+                .attr("height", height)
+                .call(d3.zoom().on("zoom", function (event) {
+                    svg.attr("transform", event.transform)
+                }))
+                .append("g");
+
+            const simulation = d3.forceSimulation(nodes)
+                .force("link", d3.forceLink(links).id(d => d.id).distance(100))
+                .force("charge", d3.forceManyBody().strength(-200))
+                .force("center", d3.forceCenter(width / 2, height / 2));
+
+            const link = svg.append("g")
+                .selectAll("line")
+                .data(links)
+                .enter().append("line")
+                .attr("stroke", "var(--border-color)")
+                .attr("stroke-width", 2);
+
+            const node = svg.append("g")
+                .selectAll("circle")
+                .data(nodes)
+                .enter().append("circle")
+                .attr("r", 15)
+                .attr("fill", d => {
+                    const colors = ["var(--border-color)", "#f44336", "#ff9800", "#ffeb3b", "#8bc34a", "#4caf50"];
+                    return colors[d.score] || colors[0];
+                })
+                .attr("stroke", "white")
+                .attr("stroke-width", 2)
+                .call(d3.drag()
+                    .on("start", dragstarted)
+                    .on("drag", dragged)
+                    .on("end", dragended));
+
+            node.append("title").text(d => d.name);
+
+            const label = svg.append("g")
+                .selectAll("text")
+                .data(nodes)
+                .enter().append("text")
+                .text(d => d.name.length > 15 ? d.name.substring(0, 15) + "..." : d.name)
+                .attr("font-size", "10px")
+                .attr("fill", "var(--text-main)")
+                .attr("dx", 18)
+                .attr("dy", 4);
+
+            simulation.on("tick", () => {
+                link.attr("x1", d => d.source.x)
+                    .attr("y1", d => d.source.y)
+                    .attr("x2", d => d.target.x)
+                    .attr("y2", d => d.target.y);
+
+                node.attr("cx", d => d.x).attr("cy", d => d.y);
+                label.attr("x", d => d.x).attr("y", d => d.y);
+            });
+
+            function dragstarted(event) {
+                if (!event.active) simulation.alphaTarget(0.3).restart();
+                event.subject.fx = event.subject.x;
+                event.subject.f3 = event.subject.y;
+            }
+            function dragged(event) {
+                event.subject.fx = event.x;
+                event.subject.fy = event.y;
+            }
+            function dragended(event) {
+                if (!event.active) simulation.alphaTarget(0);
+                event.subject.fx = null;
+                event.subject.fy = null;
+            }
+        }
+
+        // --- Chapters Logic ---
+        function loadChapters(videoPath) {
+            const container = document.getElementById('chapters-container');
+            container.innerHTML = 'Loading chapters...';
+            
+            fetch(`/api/get_chapters?video_path=${encodeURIComponent(videoPath)}`)
+            .then(res => res.json())
+            .then(data => {
+                container.innerHTML = '';
+                if (data.status === 'success' && data.chapters.length > 0) {
+                    data.chapters.forEach(ch => {
+                        const div = document.createElement('div');
+                        div.className = 'transcript-line';
+                        div.style.borderBottom = '1px solid var(--border-color)';
+                        div.style.padding = '12px 8px';
+                        
+                        const m = Math.floor(ch.timestamp / 60);
+                        const s = Math.floor(ch.timestamp % 60);
+                        const ts = `${m}:${s.toString().padStart(2, '0')}`;
+                        
+                        div.innerHTML = `<b style="color:var(--primary-color); cursor:pointer;">${ts}</b> - ${ch.title}`;
+                        div.onclick = () => {
+                            player.currentTime = ch.timestamp;
+                            player.play();
+                        };
+                        container.appendChild(div);
+                    });
+                } else {
+                    container.innerHTML = '<p style="color: var(--text-secondary); text-align:center;">No chapters indexed. Click Auto-Generate to begin.</p>';
+                }
+            });
+        }
+
+        function generateChapters() {
+            if (!currentVideoPath) return;
+            const btn = event.target;
+            const originalText = btn.innerText;
+            btn.innerText = "Analyzing Transcript... (Please wait)";
+            btn.disabled = true;
+
+            fetch('/api/ai_chat_context', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    video_path: currentVideoPath,
+                    context_type: 'chapters'
+                })
+            })
+            .then(res => res.json())
+            .then(data => {
+                btn.innerText = originalText;
+                btn.disabled = false;
+                if (data.status === 'success') {
+                    Swal.fire('Chapters Created!', 'The video has been indexed.', 'success');
+                    loadChapters(currentVideoPath);
+                } else {
+                    Swal.fire('Error', data.message, 'error');
+                }
+            });
         }
 
         // --- AI Assistant Logic ---
@@ -1261,6 +1618,82 @@
             });
         }
 
+        function openCourseTutor() {
+            Swal.fire({
+                title: 'Ask the Course',
+                text: 'Ask anything about the entire course content!',
+                input: 'text',
+                inputPlaceholder: 'e.g. Where is error handling explained?',
+                showCancelButton: true,
+                confirmButtonText: 'Ask AI'
+            }).then((result) => {
+                if (result.isConfirmed && result.value) {
+                    openTab('ai-assistant');
+                    appendAIMessage('user', "[Course Tutor] " + result.value);
+                    
+                    const loadingDiv = document.createElement('div');
+                    loadingDiv.id = 'ai-loading-global';
+                    loadingDiv.innerText = 'Analyzing course content...';
+                    loadingDiv.style.fontStyle = 'italic';
+                    loadingDiv.style.color = 'var(--text-secondary)';
+                    document.getElementById('ai-chat-output').appendChild(loadingDiv);
+
+                    fetch('/api/ai_course_chat', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            course_id: courseId,
+                            prompt: result.value
+                        })
+                    })
+                    .then(res => res.json())
+                    .then(data => {
+                        document.getElementById('ai-loading-global').remove();
+                        if (data.status === 'success') {
+                            appendAIMessage('ai', data.response);
+                        } else {
+                            appendAIMessage('ai', "Error: " + data.message);
+                        }
+                    });
+                }
+            });
+        }
+
+        function generateCourseBible() {
+            if (!isAuthenticated) {
+                Swal.fire('Login Required', "Please login to generate a course bible.", 'info');
+                return;
+            }
+            
+            Swal.fire({
+                title: 'Generate Course Bible?',
+                text: 'The AI will compile all your notes and transcripts into a single master study guide. This may take 30-60 seconds.',
+                icon: 'question',
+                showCancelButton: true,
+                confirmButtonText: 'Generate Now'
+            }).then((result) => {
+                if (result.isConfirmed) {
+                    openTab('ai-assistant');
+                    appendAIMessage('ai', "Compiling your Master Study Guide... gathering all notes and context.");
+                    
+                    fetch('/api/generate_course_bible', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ course_id: courseId })
+                    })
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.status === 'success') {
+                            appendAIMessage('ai', "# 📚 MASTER COURSE BIBLE\n\n" + data.bible);
+                        } else {
+                            appendAIMessage('ai', "Error: " + data.message);
+                        }
+                    })
+                    .catch(err => appendAIMessage('ai', "Error: " + err));
+                }
+            });
+        }
+
         function generateStudyPlan() {
             if (!isAuthenticated) {
                 Swal.fire('Login Required', "Please login to generate a study plan.", 'info');
@@ -1423,6 +1856,7 @@
                 
                 saveProgress(currentVideoPath, title, 0);
                 loadTranscript(currentVideoPath);
+                loadChapters(currentVideoPath);
             }
             
             const moduleList = activeElement.closest('.video-list');
@@ -1863,6 +2297,65 @@
             
             // Trigger save
             noteEditor.dispatchEvent(new Event('blur'));
+        }
+
+        function takeSnapshot() {
+            if (!currentVideoPath) {
+                Swal.fire('Video Required', 'Play a video first', 'warning');
+                return;
+            }
+            if (!isAuthenticated) {
+                Swal.fire('Login Required', 'Login to save snapshots to your notes', 'info');
+                return;
+            }
+
+            const canvas = document.createElement('canvas');
+            canvas.width = player.videoWidth;
+            canvas.height = player.videoHeight;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(player, 0, 0, canvas.width, canvas.height);
+            
+            const dataURL = canvas.toDataURL('image/jpeg', 0.8);
+            const timestamp = player.currentTime;
+
+            fetch('/api/save_snapshot', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    video_path: currentVideoPath,
+                    image: dataURL,
+                    timestamp: timestamp
+                })
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    // Append to notes
+                    const m = Math.floor(timestamp / 60);
+                    const s = Math.floor(timestamp % 60);
+                    const ts = `${m}:${s.toString().padStart(2, '0')}`;
+                    
+                    const markdown = `\n\n![Snapshot at ${ts}](${data.image_url})\n`;
+                    noteEditor.value += markdown;
+                    
+                    // Trigger save
+                    noteEditor.dispatchEvent(new Event('blur'));
+                    
+                    Swal.fire({
+                        title: 'Snapshot Captured!',
+                        text: 'Image embedded in your notes.',
+                        imageUrl: data.image_url,
+                        imageWidth: 200,
+                        timer: 1500,
+                        showConfirmButton: false
+                    });
+                }
+            });
+        }
+
+        function togglePlayerMenu() {
+            document.getElementById('playerMobileMenu').classList.toggle('open');
+            document.getElementById('playerMenuOverlay').classList.toggle('open');
         }
     </script>
 </body>

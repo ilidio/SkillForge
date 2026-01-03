@@ -63,9 +63,18 @@
 
         .logo-light { display: block; }
         .logo-dark { display: none; }
+        .logo-mobile-light { display: none; }
+        .logo-mobile-dark { display: none; }
 
         [data-theme="dark"] .logo-light { display: none; }
         [data-theme="dark"] .logo-dark { display: block; }
+
+        @media (max-width: 768px) {
+            .logo-light, .logo-dark { display: none !important; }
+            .logo-mobile-light { display: block; height: 35px; }
+            [data-theme="dark"] .logo-mobile-light { display: none; }
+            [data-theme="dark"] .logo-mobile-dark { display: block; height: 35px; }
+        }
 
         h1 { margin: 0; display: none; } /* Hide text H1 as we have logo now */
         
@@ -73,6 +82,63 @@
             display: flex;
             gap: 10px;
             align-items: center;
+        }
+
+        /* Hamburger Menu */
+        .hamburger-btn {
+            display: none;
+            background: none;
+            border: 1px solid var(--border-color);
+            padding: 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            color: var(--text-main);
+            font-size: 1.2em;
+        }
+
+        .mobile-menu {
+            display: none;
+            position: fixed;
+            top: 0;
+            right: 0;
+            bottom: 0;
+            width: 250px;
+            background: var(--bg-card);
+            z-index: 1000;
+            padding: 20px;
+            box-shadow: -5px 0 15px rgba(0,0,0,0.1);
+            border-left: 1px solid var(--border-color);
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .mobile-menu.open { display: flex; }
+        .menu-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 999;
+        }
+        .menu-overlay.open { display: block; }
+
+        .user-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: var(--primary-color);
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            overflow: hidden;
+            border: 2px solid var(--border-color);
+        }
+        .user-avatar img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
         }
 
         .settings-link {
@@ -292,6 +358,27 @@
             color: var(--text-secondary);
             font-size: 1.1em;
         }
+
+        /* Mobile Responsiveness */
+        @media (max-width: 1000px) {
+            .user-name-text { display: none; }
+        }
+
+        @media (max-width: 768px) {
+            body { padding: 10px; }
+            .header-section { gap: 15px; align-items: center; }
+            .header-controls { display: none; }
+            .hamburger-btn { display: block; }
+            .settings-link { width: 100%; box-sizing: border-box; text-align: center; }
+            .course-grid { grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 15px; }
+            .cw-position { font-size: 1em; padding: 6px 10px; }
+        }
+
+        @media (max-width: 480px) {
+            .course-grid { grid-template-columns: 1fr; }
+            .logo-img { height: 30px; }
+            .stat-card { padding: 15px; }
+        }
     </style>
     <!-- SweetAlert2 -->
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
@@ -321,28 +408,99 @@
             <div class="logo-container">
                 <img src="/static/images/logo.png" alt="SkillForge" class="logo-img logo-light">
                 <img src="/static/images/logo_dark.png" alt="SkillForge" class="logo-img logo-dark">
+                <img src="/static/images/logo_mobile.png" alt="SkillForge" class="logo-img logo-mobile-light">
+                <img src="/static/images/logo_dark_mobile.png" alt="SkillForge" class="logo-img logo-mobile-dark">
                 <h1>SkillForge</h1>
             </div>
             <div class="header-controls">
                 {% if current_user.is_authenticated %}
-                    <span style="margin-right: 10px; font-weight: 500;">Hi, {{ current_user.name }}</span>
-                    <a href="/analytics" class="settings-link" style="background: #2e7d32; color: white; border: none;">📊 Stats</a>
-                    <a href="/resources" class="settings-link">📂 Vault</a>
-                    <a href="/logout" class="settings-link" style="border-color: #d32f2f; color: #d32f2f;">Logout</a>
+                    <div style="display: flex; align-items: center; gap: 10px; margin-right: 10px;">
+                        <div class="user-avatar" title="{{ current_user.name }}">
+                            {% if current_user.profile_pic %}
+                                <img src="{{ current_user.profile_pic }}" alt="Avatar">
+                            {% else %}
+                                {{ current_user.name[0] | upper }}
+                            {% endif %}
+                        </div>
+                        <span class="user-name-text" style="font-weight: 500;">{{ current_user.name }}</span>
+                    </div>
+                    <a href="/analytics" class="settings-link" style="background: #2e7d32; color: white; border: none;" title="View your learning statistics and AI usage">📊 Stats</a>
+                    <a href="/resources" class="settings-link" title="Access all course files and documents">📂 Vault</a>
+                    <a href="/logout" class="settings-link" style="border-color: #d32f2f; color: #d32f2f;" title="Sign out of your account">Logout</a>
                 {% else %}
                     <span style="margin-right: 10px; color: #666;">(Anonymous)</span>
-                    <a href="/login" class="settings-link" style="background: var(--primary-color); color: white; border: none;">Login</a>
+                    <a href="/login" class="settings-link" style="background: var(--primary-color); color: white; border: none;" title="Log in to your account">Login</a>
                 {% endif %}
-                <button class="theme-toggle" onclick="toggleTheme()" title="Toggle Dark Mode">🌓</button>
-                <a href="/study" class="settings-link" style="background: var(--bg-card); border-color: var(--primary-color); color: var(--primary-color);">🧠 Study</a>
-                <a href="/settings" class="settings-link">⚙ Settings</a>
+                <button class="theme-toggle" onclick="toggleTheme()" title="Switch between Light and Dark mode">🌓</button>
+                <a href="/study" class="settings-link" style="background: var(--bg-card); border-color: var(--primary-color); color: var(--primary-color);" title="Review your flashcards">🧠 Study</a>
+                <a href="/settings" class="settings-link" title="Manage application settings and course data">⚙ Settings</a>
             </div>
+
+            <button class="hamburger-btn" onclick="toggleMenu()" title="Open Menu">☰</button>
+        </div>
+
+        <div class="menu-overlay" id="menuOverlay" onclick="toggleMenu()"></div>
+        <div class="mobile-menu" id="mobileMenu">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                <h3 style="margin: 0;">Menu</h3>
+                <button class="hamburger-btn" onclick="toggleMenu()" style="border: none;">✕</button>
+            </div>
+            
+            {% if current_user.is_authenticated %}
+                <div style="padding: 15px 0; border-bottom: 1px solid var(--border-color); display: flex; align-items: center; gap: 15px;">
+                    <div class="user-avatar" style="width: 48px; height: 48px; font-size: 1.2em;">
+                        {% if current_user.profile_pic %}
+                            <img src="{{ current_user.profile_pic }}" alt="Avatar">
+                        {% else %}
+                            {{ current_user.name[0] | upper }}
+                        {% endif %}
+                    </div>
+                    <div style="display: flex; flex-direction: column;">
+                        <span style="font-weight: bold; color: var(--text-main);">{{ current_user.name }}</span>
+                        <span style="font-size: 0.8em; color: var(--text-secondary);">Member</span>
+                    </div>
+                </div>
+                <a href="/analytics" class="settings-link" style="background: #2e7d32; color: white; border: none; margin-top: 10px;">📊 Stats</a>
+                <a href="/resources" class="settings-link">📂 Vault</a>
+                <a href="/logout" class="settings-link" style="border-color: #d32f2f; color: #d32f2f;">Logout</a>
+            {% else %}
+                <a href="/login" class="settings-link" style="background: var(--primary-color); color: white; border: none;">Login</a>
+            {% endif %}
+            
+            <button class="settings-link" onclick="toggleTheme(); toggleMenu();" style="cursor: pointer; background: var(--bg-card);">🌓 Toggle Theme</button>
+            <a href="/study" class="settings-link" style="background: var(--bg-card); border-color: var(--primary-color); color: var(--primary-color);">🧠 Study Deck</a>
+            <a href="/settings" class="settings-link">⚙ Settings</a>
         </div>
 
         <div class="search-section">
             <span class="search-icon">🔍</span>
             <input type="text" id="courseSearch" class="search-input" placeholder="Search for courses..." autocomplete="off">
         </div>
+
+        {% if daily_review %}
+        <div class="review-section" style="margin-bottom: 30px; background: rgba(255, 183, 0, 0.1); border: 1px solid #ffb700; padding: 20px; border-radius: 8px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                <h2 style="font-size: 1.2em; margin: 0; color: #ffb700;">⏰ Daily Review (Don't Forget!)</h2>
+                <span style="font-size: 0.85em; color: var(--text-secondary);">AI suggested these based on your confidence scores</span>
+            </div>
+            <div class="course-grid">
+                {% for item in daily_review %}
+                <div class="course-card-wrapper">
+                    <a href="/course/{{ item.course_id }}?video={{ item.video_path }}" class="course-card" style="border-color: #ffb700;">
+                        <div class="course-content">
+                            <div class="course-meta" style="color: #ffb700; font-weight: bold; margin-bottom: 5px;">{{ item.course_title }}</div>
+                            <div class="course-title" style="font-size: 1em;">{{ item.video_title }}</div>
+                            <div style="margin-top: 10px; font-size: 0.85em; color: var(--text-secondary);">
+                                Confidence: 
+                                <span style="color: #f44336;">{{ '★' * item.mastery_score }}{{ '☆' * (5 - item.mastery_score) }}</span>
+                            </div>
+                        </div>
+                    </a>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
         
         <!-- Playlists Section -->
         <div id="playlist-section" style="margin-bottom: 30px; display: none;">
@@ -581,6 +739,11 @@
                     window.location.reload();
                 }
             });
+        }
+
+        function toggleMenu() {
+            document.getElementById('mobileMenu').classList.toggle('open');
+            document.getElementById('menuOverlay').classList.toggle('open');
         }
     </script>
 </body>

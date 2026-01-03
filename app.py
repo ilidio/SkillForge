@@ -6,6 +6,7 @@ from flask_login import LoginManager, UserMixin, login_user, login_required, log
 from werkzeug.security import generate_password_hash, check_password_hash
 import uuid
 import datetime
+import base64
 import io
 import json
 import requests
@@ -41,11 +42,12 @@ login_manager.login_view = 'login'
 
 # --- User Model ---
 class User(UserMixin):
-    def __init__(self, id, username, name, address, is_admin=False):
+    def __init__(self, id, username, name, address, profile_pic=None, is_admin=False):
         self.id = id
         self.username = username
         self.name = name
         self.address = address
+        self.profile_pic = profile_pic
         self.is_admin = is_admin
 
 @login_manager.user_loader
@@ -54,7 +56,9 @@ def load_user(user_id):
     user_row = conn.execute('SELECT * FROM users WHERE id = ?', (user_id,)).fetchone()
     conn.close()
     if user_row:
-        return User(user_row['id'], user_row['username'], user_row['name'], user_row['address'])
+        # Check for profile_pic column in Row
+        pic = user_row['profile_pic'] if 'profile_pic' in user_row.keys() else None
+        return User(user_row['id'], user_row['username'], user_row['name'], user_row['address'], profile_pic=pic)
     return None
 
 @app.template_filter('format_time')
@@ -484,6 +488,32 @@ def init_db():
             PRIMARY KEY (user_id, video_path),
             FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
         );
+
+        CREATE TABLE IF NOT EXISTS video_chapters (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            video_path TEXT NOT NULL,
+            timestamp REAL NOT NULL,
+            title TEXT NOT NULL,
+            UNIQUE(video_path, timestamp)
+        );
+
+        CREATE TABLE IF NOT EXISTS video_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            video_path TEXT NOT NULL,
+            image_path TEXT NOT NULL,
+            timestamp REAL NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS user_xp (
+            user_id INTEGER PRIMARY KEY,
+            total_xp INTEGER DEFAULT 0,
+            level INTEGER DEFAULT 1,
+            daily_goal_mins INTEGER DEFAULT 30,
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+        );
     ''')
 
     # Migrations
@@ -492,6 +522,12 @@ def init_db():
     except sqlite3.OperationalError:
         print("Migrating: Adding item_type to videos...")
         conn.execute("ALTER TABLE videos ADD COLUMN item_type TEXT DEFAULT 'video'")
+
+    try:
+        conn.execute('SELECT profile_pic FROM users LIMIT 1')
+    except sqlite3.OperationalError:
+        print("Migrating: Adding profile_pic to users...")
+        conn.execute("ALTER TABLE users ADD COLUMN profile_pic TEXT")
 
     conn.commit()
     conn.close()
@@ -683,6 +719,23 @@ def index():
         '''
         params = ()
 
+    # Daily Review (Spaced Repetition) logic
+    daily_review = []
+    if user_id:
+        review_rows = conn.execute('''
+            SELECT v.title as video_title, v.path as video_path, 
+                   c.title as course_title, c.id as course_id,
+                   m.score as mastery_score, m.updated_at
+            FROM video_mastery m
+            JOIN videos v ON m.video_path = v.path
+            JOIN modules mod ON v.module_id = mod.id
+            JOIN courses c ON mod.course_id = c.id
+            WHERE m.user_id = ? AND m.score > 0 AND m.score < 4
+            ORDER BY m.updated_at ASC
+            LIMIT 3
+        ''', (user_id,)).fetchall()
+        daily_review = [dict(r) for r in review_rows]
+
     courses_rows = conn.execute(query, params).fetchall()
     
     courses_data = []
@@ -705,7 +758,7 @@ def index():
         courses_data.append(course)
         
     conn.close()
-    return render_template('index.html', courses=courses_data, continue_watching=continue_watching)
+    return render_template('index.html', courses=courses_data, continue_watching=continue_watching, daily_review=daily_review)
 
 @app.route('/search')
 def search_page():
@@ -850,11 +903,17 @@ def settings():
     user_id = get_current_user_id()
     
     # Get API Key & Model & AI Enabled Status
-    settings_rows = conn.execute("SELECT key, value FROM user_settings WHERE user_id=? AND key IN ('gemini_api_key', 'gemini_model', 'ai_features_enabled', 'ai_provider', 'local_ai_url', 'local_whisper_url')", (user_id,)).fetchall()
+    settings_rows = conn.execute("SELECT key, value FROM user_settings WHERE user_id=? AND key IN ('gemini_api_key', 'gemini_model', 'local_model', 'ai_features_enabled', 'ai_provider', 'local_ai_url', 'local_whisper_url')", (user_id,)).fetchall()
     settings_map = {row['key']: row['value'] for row in settings_rows}
     
     api_key = settings_map.get('gemini_api_key', '')
-    selected_model = settings_map.get('gemini_model', 'gemini-2.0-flash')
+    gemini_model = settings_map.get('gemini_model', 'gemini-2.0-flash')
+    local_model = settings_map.get('local_model', '')
+    
+    # Sanitize Gemini Model (Only remove local models with slashes like 'TheBloke/...')
+    if '/' in gemini_model:
+        gemini_model = 'gemini-2.0-flash'
+    
     ai_enabled = settings_map.get('ai_features_enabled', 'true') == 'true'
     ai_provider = settings_map.get('ai_provider', 'gemini')
     local_ai_url = settings_map.get('local_ai_url', 'http://localhost:1234/v1/chat/completions')
@@ -864,6 +923,10 @@ def settings():
     quiz_stats = conn.execute('SELECT SUM(correct_answers) as c, SUM(total_questions) as t FROM quiz_stats WHERE user_id=?', (user_id,)).fetchone()
     quiz_correct = quiz_stats['c'] or 0
     quiz_total = quiz_stats['t'] or 0
+
+    # XP/Goal Settings
+    xp_row = conn.execute('SELECT daily_goal_mins FROM user_xp WHERE user_id=?', (user_id,)).fetchone()
+    daily_goal = xp_row['daily_goal_mins'] if xp_row else 30
 
     courses_query = conn.execute('SELECT id, title, description, alternate_title FROM courses ORDER BY title').fetchall()
     
@@ -880,7 +943,7 @@ def settings():
             'percentage': stats['percentage']
         })
     conn.close()
-    return render_template('settings.html', courses=courses_data, api_key=api_key, selected_model=selected_model, ai_enabled=ai_enabled, ai_provider=ai_provider, local_ai_url=local_ai_url, local_whisper_url=local_whisper_url, quiz_correct=quiz_correct, quiz_total=quiz_total)
+    return render_template('settings.html', courses=courses_data, api_key=api_key, gemini_model=gemini_model, local_model=local_model, ai_enabled=ai_enabled, ai_provider=ai_provider, local_ai_url=local_ai_url, local_whisper_url=local_whisper_url, quiz_correct=quiz_correct, quiz_total=quiz_total, daily_goal=daily_goal)
 
 @app.route('/course/<int:course_id>')
 def player(course_id):
@@ -1034,6 +1097,21 @@ def logout():
 
 # --- API Routes ---
 
+def award_xp(user_id, amount):
+    if not user_id: return
+    conn = get_db_connection()
+    # Ensure user has record
+    conn.execute('INSERT OR IGNORE INTO user_xp (user_id, total_xp, level) VALUES (?, 0, 1)', (user_id,))
+    conn.execute('UPDATE user_xp SET total_xp = total_xp + ? WHERE user_id = ?', (amount, user_id))
+    
+    # Simple Level Up logic: 1000 XP per level
+    row = conn.execute('SELECT total_xp FROM user_xp WHERE user_id = ?', (user_id,)).fetchone()
+    new_level = (row['total_xp'] // 1000) + 1
+    conn.execute('UPDATE user_xp SET level = ? WHERE user_id = ?', (new_level, user_id))
+    
+    conn.commit()
+    conn.close()
+
 @app.route('/api/save_progress', methods=['POST'])
 def save_progress():
     data = request.json
@@ -1100,7 +1178,17 @@ def save_progress():
 
     conn.commit()
     conn.close()
+
+    # Award XP
+    if user_id:
+        # 1 XP per second watched (approx) + 100 for completion
+        xp_gain = seconds_inc * 2
+        if is_completed and not was_completed:
+            xp_gain += 100
+        award_xp(user_id, xp_gain)
+
     return jsonify({"status": "success", "is_completed": is_completed, "new_achievements": new_badges})
+
 
 @app.route('/api/get_note', methods=['GET'])
 def get_note():
@@ -1225,6 +1313,10 @@ def save_quiz_result():
                  (user_id, course_id, correct, total))
     conn.commit()
     conn.close()
+    
+    # Award XP: 50 per correct answer
+    award_xp(user_id, correct * 50)
+    
     return jsonify({"status": "success"})
 
 @app.route('/api/save_mastery', methods=['POST'])
@@ -1249,6 +1341,84 @@ def save_mastery():
     conn.commit()
     conn.close()
     return jsonify({"status": "success"})
+
+@app.route('/api/save_goal', methods=['POST'])
+@login_required
+def save_goal():
+    data = request.json
+    user_id = current_user.id
+    goal = data.get('daily_goal', 30)
+    
+    conn = get_db_connection()
+    conn.execute('INSERT OR IGNORE INTO user_xp (user_id, daily_goal_mins) VALUES (?, ?)', (user_id, goal))
+    conn.execute('UPDATE user_xp SET daily_goal_mins = ? WHERE user_id = ?', (goal, user_id))
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "success"})
+
+@app.route('/api/update_profile_pic', methods=['POST'])
+@login_required
+def update_profile_pic():
+    if 'file' not in request.files:
+        return jsonify({"status": "error", "message": "No file"}), 400
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({"status": "error", "message": "No selected file"}), 400
+    
+    try:
+        # Save file
+        filename = f"profile_{current_user.id}_{uuid.uuid4().hex[:8]}.jpg"
+        filepath = os.path.join("static", "snapshots", filename)
+        file.save(filepath)
+        
+        img_url = "/" + filepath.replace("\\", "/")
+        
+        conn = get_db_connection()
+        conn.execute('UPDATE users SET profile_pic = ? WHERE id = ?', (img_url, current_user.id))
+        conn.commit()
+        conn.close()
+        
+        return jsonify({"status": "success", "image_url": img_url})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+
+@app.route('/api/save_snapshot', methods=['POST'])
+@login_required
+def save_snapshot():
+    data = request.json
+    user_id = current_user.id
+    video_path = data.get('video_path')
+    img_data = data.get('image') # Base64
+    timestamp = data.get('timestamp', 0)
+    
+    if not img_data:
+        return jsonify({"status": "error", "message": "No image data"}), 400
+        
+    # Decode base64
+    try:
+        header, encoded = img_data.split(",", 1)
+        data_bytes = base64.b64decode(encoded)
+        
+        filename = f"snap_{user_id}_{uuid.uuid4().hex[:8]}.jpg"
+        filepath = os.path.join("static", "snapshots", filename)
+        
+        with open(filepath, "wb") as f:
+            f.write(data_bytes)
+            
+        img_url = "/" + filepath.replace("\\", "/")
+        
+        conn = get_db_connection()
+        conn.execute('INSERT INTO video_snapshots (user_id, video_path, image_path, timestamp) VALUES (?, ?, ?, ?)',
+                     (user_id, video_path, img_url, timestamp))
+        conn.commit()
+        conn.close()
+        
+        return jsonify({"status": "success", "image_url": img_url})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 
 
 @app.route('/analytics')
@@ -1318,6 +1488,26 @@ def analytics_page():
     mastery_stats = conn.execute('SELECT AVG(score) as avg_score, COUNT(*) as total_rated FROM video_mastery WHERE user_id=?', (user_id,)).fetchone()
     avg_mastery = round(mastery_stats['avg_score'] or 0, 1)
     total_rated = mastery_stats['total_rated'] or 0
+
+    # XP & Level Analytics
+    xp_row = conn.execute('SELECT * FROM user_xp WHERE user_id=?', (user_id,)).fetchone()
+    if not xp_row:
+        user_xp_data = {'total_xp': 0, 'level': 1, 'daily_goal_mins': 30, 'next_level_xp': 1000, 'current_level_base': 0, 'pct': 0}
+    else:
+        lvl = xp_row['level']
+        total = xp_row['total_xp']
+        base = (lvl - 1) * 1000
+        target = lvl * 1000
+        progress = total - base
+        pct = int((progress / 1000) * 100)
+        user_xp_data = {
+            'total_xp': total,
+            'level': lvl,
+            'daily_goal_mins': xp_row['daily_goal_mins'],
+            'next_level_xp': target,
+            'current_level_base': base,
+            'pct': pct
+        }
         
     conn.close()
     return render_template('analytics.html', 
@@ -1332,7 +1522,8 @@ def analytics_page():
                            quiz_correct=quiz_correct,
                            quiz_total=quiz_total,
                            avg_mastery=avg_mastery,
-                           total_rated=total_rated)
+                           total_rated=total_rated,
+                           user_xp=user_xp_data)
 
 # --- Playlist Routes ---
 
@@ -1783,7 +1974,7 @@ def ai_chat():
     user_id = current_user.id
     
     conn = get_db_connection()
-    settings_rows = conn.execute("SELECT key, value FROM user_settings WHERE user_id=? AND key IN ('gemini_api_key', 'ai_features_enabled', 'ai_provider', 'local_ai_url', 'gemini_model')", (user_id,)).fetchall()
+    settings_rows = conn.execute("SELECT key, value FROM user_settings WHERE user_id=? AND key IN ('gemini_api_key', 'ai_features_enabled', 'ai_provider', 'local_ai_url', 'gemini_model', 'local_model')", (user_id,)).fetchall()
     settings = {row['key']: row['value'] for row in settings_rows}
     conn.close()
     
@@ -1791,8 +1982,8 @@ def ai_chat():
          return jsonify({"status": "error", "message": "AI features are disabled in settings."}), 403
          
     prompt = request.json.get('prompt')
-    model_name = request.json.get('model', settings.get('gemini_model', 'gemini-2.0-flash')) 
     provider = settings.get('ai_provider', 'gemini')
+    model_name = request.json.get('model', settings.get('gemini_model' if provider == 'gemini' else 'local_model', 'gemini-2.0-flash')) 
     api_key = settings.get('gemini_api_key')
     local_url = settings.get('local_ai_url')
     
@@ -1897,7 +2088,7 @@ def get_or_generate_transcript(video_path, user_id):
 
     # 2. If not found, attempt generation
     conn = get_db_connection()
-    settings_rows = conn.execute("SELECT key, value FROM user_settings WHERE user_id=? AND key IN ('gemini_api_key', 'ai_features_enabled', 'ai_provider', 'local_whisper_url', 'gemini_model')", (user_id,)).fetchall()
+    settings_rows = conn.execute("SELECT key, value FROM user_settings WHERE user_id=? AND key IN ('gemini_api_key', 'ai_features_enabled', 'ai_provider', 'local_whisper_url', 'gemini_model', 'local_model')", (user_id,)).fetchall()
     settings = {row['key']: row['value'] for row in settings_rows}
     conn.close()
     
@@ -1906,7 +2097,7 @@ def get_or_generate_transcript(video_path, user_id):
     
     provider = settings.get('ai_provider', 'gemini')
     api_key = settings.get('gemini_api_key')
-    gemini_model = settings.get('gemini_model', 'gemini-1.5-flash')
+    model_name = settings.get('gemini_model' if provider == 'gemini' else 'local_model', 'gemini-1.5-flash')
     local_whisper_url = settings.get('local_whisper_url')
 
     if provider == 'gemini':
@@ -1923,7 +2114,7 @@ def get_or_generate_transcript(video_path, user_id):
             time.sleep(2)
         
         prompt = "Generate a transcript for this video in WebVTT format. Output ONLY the WebVTT text, starting with 'WEBVTT'."
-        response = client.models.generate_content(model=gemini_model, contents=[file_ref, prompt])
+        response = client.models.generate_content(model=model_name, contents=[file_ref, prompt])
         vtt_content = convert_to_vtt(response.text)
         
         with open(base_path + ".vtt", 'w', encoding='utf-8') as f: f.write(vtt_content)
@@ -1963,16 +2154,16 @@ def ai_chat_context():
     
     # 1. Get Settings
     conn = get_db_connection()
-    settings_rows = conn.execute("SELECT key, value FROM user_settings WHERE user_id=? AND key IN ('gemini_api_key', 'gemini_model', 'ai_features_enabled', 'ai_provider', 'local_ai_url')", (user_id,)).fetchall()
+    settings_rows = conn.execute("SELECT key, value FROM user_settings WHERE user_id=? AND key IN ('gemini_api_key', 'gemini_model', 'local_model', 'ai_features_enabled', 'ai_provider', 'local_ai_url')", (user_id,)).fetchall()
     settings = {row['key']: row['value'] for row in settings_rows}
     conn.close()
     
     if settings.get('ai_features_enabled', 'true') != 'true':
          return jsonify({"status": "error", "message": "AI features are disabled in settings."}), 403
     
-    api_key = settings.get('gemini_api_key')
-    model_name = settings.get('gemini_model', 'gemini-2.0-flash')
     provider = settings.get('ai_provider', 'gemini')
+    api_key = settings.get('gemini_api_key')
+    model_name = settings.get('gemini_model' if provider == 'gemini' else 'local_model', 'gemini-2.0-flash')
     local_url = settings.get('local_ai_url')
     
     # 2. Get Transcript (Automated)
@@ -2030,15 +2221,18 @@ def ai_chat_context():
         """
         final_prompt = "Generate quiz."
 
-    elif context_type == 'mindmap':
+    elif context_type == 'chapters':
         system_instruction += """
-        Create a detailed Mind Map of the concepts in this video using Mermaid.js syntax.
-        - Start with 'mindmap' keyword.
-        - Use hierarchical indentation.
-        - Be comprehensive but concise.
-        Return ONLY the Mermaid code. Do not wrap in markdown blocks like ```mermaid.
+        Analyze the transcript and identify the main topic changes.
+        Create a list of 5-8 chapters with titles and timestamps.
+        Return ONLY valid JSON in the following format:
+        [
+            {"timestamp": 0, "title": "Introduction"},
+            {"timestamp": 125, "title": "Setup Logic"}
+        ]
+        Do not add markdown formatting. Ensure timestamps are in SECONDS (integers or floats).
         """
-        final_prompt = "Generate concept mind map."
+        final_prompt = "Generate video chapters."
 
     elif context_type == 'glossary':
         system_instruction += """
@@ -2106,10 +2300,152 @@ def ai_chat_context():
             clean_text = ai_text.replace('```json', '').replace('```', '').strip()
             return jsonify({"status": "success", "response": clean_text, "is_json": True})
 
+        elif context_type == 'chapters':
+            # Clean potential markdown
+            clean_text = ai_text.replace('```json', '').replace('```', '').strip()
+            try:
+                chapters = json.loads(clean_text)
+                conn = get_db_connection()
+                # Clear old
+                conn.execute('DELETE FROM video_chapters WHERE video_path = ?', (video_path,))
+                for ch in chapters:
+                    conn.execute('INSERT INTO video_chapters (video_path, timestamp, title) VALUES (?, ?, ?)',
+                                 (video_path, ch['timestamp'], ch['title']))
+                conn.commit()
+                conn.close()
+                return jsonify({"status": "success", "response": "Chapters generated"})
+            except:
+                return jsonify({"status": "error", "message": "Failed to parse chapters JSON"})
+
         return jsonify({"status": "success", "response": ai_text})
         
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/ai_course_chat', methods=['POST'])
+@login_required
+def ai_course_chat():
+    if not genai:
+        return jsonify({"status": "error", "message": "Google GenAI library not installed."}), 500
+        
+    user_id = current_user.id
+    data = request.json
+    course_id = data.get('course_id')
+    prompt = data.get('prompt')
+    
+    conn = get_db_connection()
+    settings_rows = conn.execute("SELECT key, value FROM user_settings WHERE user_id=? AND key IN ('gemini_api_key', 'gemini_model', 'ai_features_enabled', 'ai_provider', 'local_ai_url')", (user_id,)).fetchall()
+    settings = {row['key']: row['value'] for row in settings_rows}
+    
+    if settings.get('ai_features_enabled', 'true') != 'true':
+         conn.close()
+         return jsonify({"status": "error", "message": "AI features are disabled."}), 403
+    
+    api_key = settings.get('gemini_api_key')
+    model_name = settings.get('gemini_model', 'gemini-2.0-flash')
+    provider = settings.get('ai_provider', 'gemini')
+    local_url = settings.get('local_ai_url')
+
+    # Get Course Context
+    course = conn.execute('SELECT title FROM courses WHERE id=?', (course_id,)).fetchone()
+    modules = conn.execute('SELECT id, title FROM modules WHERE course_id=? ORDER BY order_index', (course_id,)).fetchall()
+    
+    context_text = f"Course Title: {course['title']}\nCurriculum:\n"
+    for mod in modules:
+        context_text += f"\nModule: {mod['title']}\n"
+        videos = conn.execute('SELECT title, path FROM videos WHERE module_id=? ORDER BY order_index', (mod['id'],)).fetchall()
+        for v in videos:
+            context_text += f"- {v['title']}\n"
+            # Try to get a tiny snippet of transcript for keywords
+            base_path = os.path.splitext(os.path.join(COURSES_DIR, v['path']))[0]
+            for ext in ['.vtt', '.srt']:
+                if os.path.exists(base_path + ext):
+                    try:
+                        with open(base_path + ext, 'r', encoding='utf-8', errors='ignore') as f:
+                            snippet = f.read()[:500] # Just first 500 chars for keywords
+                            context_text += f"  (Content Keywords: {snippet.replace('WEBVTT','').strip()[:200]}...)\n"
+                    except: pass
+                    break
+    
+    conn.close()
+
+    system_instruction = f"""
+    You are a course mentor. You have the curriculum and content snippets for the entire course.
+    COURSE CONTEXT:
+    {context_text}
+    
+    Answer the student's question about where to find information or general summaries across the whole course.
+    Be encouraging and specific about module names or video titles.
+    """
+
+    try:
+        response_text = call_ai_service(provider, api_key, model_name, local_url, system_instruction, prompt, user_id, "global_course_chat")
+        return jsonify({"status": "success", "response": response_text})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/generate_course_bible', methods=['POST'])
+@login_required
+def generate_course_bible():
+    if not genai:
+        return jsonify({"status": "error", "message": "Google GenAI library not installed."}), 500
+        
+    user_id = current_user.id
+    course_id = request.json.get('course_id')
+    
+    conn = get_db_connection()
+    settings_rows = conn.execute("SELECT key, value FROM user_settings WHERE user_id=? AND key IN ('gemini_api_key', 'gemini_model', 'ai_features_enabled', 'ai_provider', 'local_ai_url')", (user_id,)).fetchall()
+    settings = {row['key']: row['value'] for row in settings_rows}
+    
+    if settings.get('ai_features_enabled', 'true') != 'true':
+         conn.close()
+         return jsonify({"status": "error", "message": "AI features are disabled."}), 403
+    
+    api_key = settings.get('gemini_api_key')
+    model_name = settings.get('gemini_model', 'gemini-2.0-flash')
+    provider = settings.get('ai_provider', 'gemini')
+    local_url = settings.get('local_ai_url')
+
+    # Aggregrate all notes
+    course = conn.execute('SELECT title FROM courses WHERE id=?', (course_id,)).fetchone()
+    notes_rows = conn.execute('''
+        SELECT v.title as video_title, n.content 
+        FROM video_notes n
+        JOIN videos v ON n.video_path = v.path
+        JOIN modules m ON v.module_id = m.id
+        WHERE n.user_id = ? AND m.course_id = ?
+    ''', (user_id, course_id)).fetchall()
+    conn.close()
+
+    if not notes_rows:
+        return jsonify({"status": "error", "message": "No notes found for this course. Write some notes first!"}), 400
+
+    all_notes_text = f"Course: {course['title']}\n\n"
+    for row in notes_rows:
+        all_notes_text += f"### Video: {row['video_title']}\n{row['content']}\n\n"
+
+    system_instruction = "You are a professional editor and technical writer."
+    final_prompt = f"""
+    Below are all the personal notes I've taken for the course "{course['title']}".
+    Please transform these raw notes into a comprehensive "Course Bible" or "Master Study Guide".
+    - Organize by logical themes or modules.
+    - Use clean Markdown formatting (Headings, Bold text, Bullet points).
+    - Summarize redundant points.
+    - Add an "Executive Summary" at the beginning.
+    - Preserve any code snippets or critical technical terms.
+    
+    NOTES:
+    {all_notes_text}
+    """
+
+    try:
+        response_text = call_ai_service(provider, api_key, model_name, local_url, system_instruction, final_prompt, user_id, "course_bible")
+        return jsonify({"status": "success", "bible": response_text})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+
 
 
 @app.route('/api/ai_plan_course', methods=['POST'])
@@ -2125,7 +2461,7 @@ def ai_plan_course():
     
     # 1. Get Settings
     conn = get_db_connection()
-    settings_rows = conn.execute("SELECT key, value FROM user_settings WHERE user_id=? AND key IN ('gemini_api_key', 'gemini_model', 'ai_features_enabled', 'ai_provider', 'local_ai_url')", (user_id,)).fetchall()
+    settings_rows = conn.execute("SELECT key, value FROM user_settings WHERE user_id=? AND key IN ('gemini_api_key', 'gemini_model', 'local_model', 'ai_features_enabled', 'ai_provider', 'local_ai_url')", (user_id,)).fetchall()
     settings = {row['key']: row['value'] for row in settings_rows}
     
     if settings.get('ai_features_enabled', 'true') != 'true':
@@ -2133,8 +2469,8 @@ def ai_plan_course():
          return jsonify({"status": "error", "message": "AI features are disabled in settings."}), 403
     
     api_key = settings.get('gemini_api_key')
-    model_name = settings.get('gemini_model', 'gemini-2.0-flash')
     provider = settings.get('ai_provider', 'gemini')
+    model_name = settings.get('gemini_model' if provider == 'gemini' else 'local_model', 'gemini-2.0-flash')
     local_url = settings.get('local_ai_url')
     
     # ... (course structure logic) ...
@@ -2188,7 +2524,7 @@ def generate_transcript():
     
     # 1. Get Settings
     conn = get_db_connection()
-    settings_rows = conn.execute("SELECT key, value FROM user_settings WHERE user_id=? AND key IN ('gemini_api_key', 'ai_features_enabled', 'ai_provider', 'local_whisper_url', 'gemini_model')", (user_id,)).fetchall()
+    settings_rows = conn.execute("SELECT key, value FROM user_settings WHERE user_id=? AND key IN ('gemini_api_key', 'ai_features_enabled', 'ai_provider', 'local_whisper_url', 'gemini_model', 'local_model')", (user_id,)).fetchall()
     settings = {row['key']: row['value'] for row in settings_rows}
     conn.close()
     
@@ -2197,7 +2533,7 @@ def generate_transcript():
     
     provider = settings.get('ai_provider', 'gemini')
     api_key = settings.get('gemini_api_key')
-    gemini_model = settings.get('gemini_model', 'gemini-1.5-flash')
+    model_name = settings.get('gemini_model' if provider == 'gemini' else 'local_model', 'gemini-1.5-flash')
     local_whisper_url = settings.get('local_whisper_url')
 
     # 2. Locate File

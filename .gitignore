@@ -22,6 +22,7 @@ instance/
 # Content & Media
 courses/
 temp/
+static/snapshots/
 
 # Logs
 *.log
