@@ -1427,8 +1427,8 @@ def analytics_page():
     user_id = current_user.id
     conn = get_db_connection()
     
-    total_time = conn.execute('SELECT SUM(seconds_watched) as t FROM daily_activity WHERE user_id=?', (user_id,)).fetchone()['t'] or 0
-    total_completed = conn.execute('SELECT SUM(videos_completed) as c FROM daily_activity WHERE user_id=?', (user_id,)).fetchone()['c'] or 0
+    total_time = conn.execute('SELECT SUM(watched_time) FROM video_progress WHERE user_id=?', (user_id,)).fetchone()[0] or 0
+    total_completed = conn.execute('SELECT COUNT(*) FROM video_progress WHERE user_id=? AND is_completed=1', (user_id,)).fetchone()[0] or 0
     
     activity_rows = conn.execute('SELECT date, seconds_watched, videos_completed FROM daily_activity WHERE user_id=?', (user_id,)).fetchall()
     activity_data = {row['date']: {'seconds': row['seconds_watched'], 'count': row['videos_completed'], 'ai_count': 0} for row in activity_rows}
@@ -1849,6 +1849,14 @@ def reset_progress():
             conn.execute('DELETE FROM course_progress WHERE user_id = ?', (user_id,))
             conn.execute('DELETE FROM watched_videos WHERE user_id = ?', (user_id,))
             conn.execute('DELETE FROM video_progress WHERE user_id = ?', (user_id,))
+            conn.execute('DELETE FROM daily_activity WHERE user_id = ?', (user_id,))
+            conn.execute('DELETE FROM user_xp WHERE user_id = ?', (user_id,))
+            conn.execute('DELETE FROM user_achievements WHERE user_id = ?', (user_id,))
+            conn.execute('DELETE FROM quiz_stats WHERE user_id = ?', (user_id,))
+            conn.execute('DELETE FROM video_mastery WHERE user_id = ?', (user_id,))
+            conn.execute('DELETE FROM bookmarks WHERE user_id = ?', (user_id,))
+            conn.execute('DELETE FROM video_notes WHERE user_id = ?', (user_id,))
+            conn.execute('DELETE FROM flashcards WHERE user_id = ?', (user_id,))
         else:
             conn.execute('DELETE FROM course_progress WHERE user_id IS NULL')
             conn.execute('DELETE FROM watched_videos WHERE user_id IS NULL')
@@ -1858,6 +1866,18 @@ def reset_progress():
         if user_id:
             conn.execute('DELETE FROM video_progress WHERE user_id = ? AND video_path = ?', (user_id, video_path))
             conn.execute('DELETE FROM watched_videos WHERE user_id = ? AND video_path = ?', (user_id, video_path))
+            # Also clear from course_progress if it was the last video
+            conn.execute('''
+                UPDATE course_progress SET last_video_path = NULL, last_video_title = NULL, last_video_timestamp = 0
+                WHERE user_id = ? AND last_video_path = ?
+            ''', (user_id, video_path))
+        else:
+            conn.execute('DELETE FROM video_progress WHERE user_id IS NULL AND video_path = ?', (video_path,))
+            conn.execute('DELETE FROM watched_videos WHERE user_id IS NULL AND video_path = ?', (video_path,))
+            conn.execute('''
+                UPDATE course_progress SET last_video_path = NULL, last_video_title = NULL, last_video_timestamp = 0
+                WHERE user_id IS NULL AND last_video_path = ?
+            ''', (video_path,))
     
     elif course_id:
         if user_id:
@@ -1873,6 +1893,14 @@ def reset_progress():
             conn.execute('DELETE FROM watched_videos WHERE course_id = ? AND user_id = ?', (course_id, user_id))
         else:
             conn.execute('DELETE FROM course_progress WHERE course_id = ? AND user_id IS NULL', (course_id,))
+            conn.execute('''
+                DELETE FROM video_progress 
+                WHERE user_id IS NULL AND video_path IN (
+                    SELECT v.path FROM videos v 
+                    JOIN modules m ON v.module_id = m.id 
+                    WHERE m.course_id = ?
+                )
+            ''', (course_id,))
             conn.execute('DELETE FROM watched_videos WHERE course_id = ? AND user_id IS NULL', (course_id,))
 
     conn.commit()
