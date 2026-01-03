@@ -107,9 +107,46 @@ def srt_to_vtt(content):
     return "".join(vtt)
 
 def parse_subtitle_to_json(content):
-    """Parses SRT or VTT content into a list of subtitle objects."""
-    content = content.replace('\r\n', '\n').replace('\r', '\n')
-    blocks = content.strip().split('\n\n')
+    """Parses SRT, VTT or JSON content into a list of subtitle objects."""
+    content = content.replace('\r\n', '\n').replace('\r', '\n').strip()
+    
+    # Check if content is actually JSON (or contains JSON after WEBVTT)
+    json_str = ""
+    if content.startswith('[') or content.startswith('{'):
+        json_str = content
+    elif 'WEBVTT' in content and '[' in content:
+        json_str = content.split('[', 1)[1]
+        json_str = '[' + json_str.rsplit(']', 1)[0] + ']'
+    
+    if json_str:
+        try:
+            # Try to load as-is first
+            data = json.loads(json_str)
+        except:
+            # If it fails, maybe it's truncated. Try to fix a truncated list.
+            try:
+                # Find last valid closing brace for an object
+                last_brace = json_str.rfind('}')
+                if last_brace != -1:
+                    fixed_json = json_str[:last_brace+1] + ']'
+                    data = json.loads(fixed_json)
+                else:
+                    data = []
+            except:
+                data = []
+        
+        if data:
+            transcript = []
+            for item in data:
+                try:
+                    start = item.get('start', item.get('start_time', 0))
+                    text = item.get('text', '')
+                    transcript.append({'start': float(start), 'text': text})
+                except:
+                    continue
+            return transcript
+
+    blocks = content.split('\n\n')
     transcript = []
     
     for block in blocks:
@@ -897,8 +934,8 @@ def player(course_id):
         if os.path.exists(mod_path):
              for f in os.listdir(mod_path):
                  if os.path.isfile(os.path.join(mod_path, f)):
-                     if not f.lower().endswith(('.mp4', '.mkv', '.webm', '.mov', '.ds_store')):
-                         rel = os.path.relpath(os.path.join(mod_path, f), COURSES_DIR)
+                     if not f.lower().endswith(('.mp4', '.mkv', '.webm', '.mov', '.ds_store', '.vtt', '.srt')):
+                         rel = os.path.relpath(os.path.join(mod_path, f), course_root)
                          res_files.append({'name': f, 'path': rel})
         
         mod_dict['resources'] = res_files
@@ -1141,6 +1178,13 @@ def delete_bookmark():
 @app.route('/resources')
 @login_required
 def resources_page():
+    conn = get_db_connection()
+    courses_rows = conn.execute('SELECT id, folder_name FROM courses').fetchall()
+    conn.close()
+    
+    # Map folder_name -> {id, folder_name}
+    course_map = {row['folder_name']: {'id': row['id'], 'folder_name': row['folder_name']} for row in courses_rows}
+    
     resources = []
     for root, dirs, files in os.walk(COURSES_DIR):
         for f in files:
@@ -1148,17 +1192,17 @@ def resources_page():
                 full_path = os.path.join(root, f)
                 rel_path = os.path.relpath(full_path, COURSES_DIR)
                 parts = rel_path.split(os.sep)
-                course_name = parts[0] if len(parts) > 0 else "Unknown"
+                course_folder_name = parts[0] if len(parts) > 0 else "Unknown"
                 
-                conn = get_db_connection()
-                course = conn.execute('SELECT id FROM courses WHERE folder_name = ?', (course_name,)).fetchone()
-                conn.close()
+                course = course_map.get(course_folder_name)
                 
                 if course:
+                    course_folder_path = os.path.join(COURSES_DIR, course['folder_name'])
+                    rel_path_in_course = os.path.relpath(full_path, course_folder_path)
                     resources.append({
                         'name': f,
-                        'path': rel_path,
-                        'course_name': course_name,
+                        'path': rel_path_in_course,
+                        'course_name': course_folder_name,
                         'course_id': course['id'],
                         'size': os.path.getsize(full_path)
                     })
@@ -1801,6 +1845,40 @@ def get_models():
         print(f"DEBUG: Error fetching models: {e}")
         return jsonify({"status": "error", "message": str(e)})
 
+def convert_to_vtt(content):
+    """Clean and convert AI output (VTT or JSON) to valid WebVTT format."""
+    content = content.strip()
+    # Remove markdown blocks
+    if content.startswith("```"):
+        content = content.split('\n', 1)[1].rsplit('\n', 1)[0].replace('webvtt', '').replace('json', '').strip()
+    
+    # If it's JSON, convert to VTT string
+    if content.startswith('[') or content.startswith('{'):
+        try:
+            data = json.loads(content)
+            vtt = ["WEBVTT\n\n"]
+            for item in data:
+                start_sec = float(item.get('start', item.get('start_time', 0)))
+                end_sec = float(item.get('end', item.get('end_time', start_sec + 2)))
+                
+                def format_vtt_ts(s):
+                    hrs = int(s // 3600)
+                    mins = int((s % 3600) // 60)
+                    secs = int(s % 60)
+                    mils = int((s - int(s)) * 1000)
+                    return f"{hrs:02d}:{mins:02d}:{secs:02d}.{mils:03d}"
+                
+                ts = f"{format_vtt_ts(start_sec)} --> {format_vtt_ts(end_sec)}"
+                vtt.append(f"{ts}\n{item.get('text', '')}\n")
+            return "\n".join(vtt)
+        except:
+            pass
+            
+    # If it's already VTT or fallback
+    if not content.startswith("WEBVTT"):
+        content = "WEBVTT\n\n" + content
+    return content
+
 def get_or_generate_transcript(video_path, user_id):
     """Retrieves existing transcript or generates one if missing and AI is enabled."""
     full_path = os.path.join(COURSES_DIR, video_path)
@@ -1846,10 +1924,7 @@ def get_or_generate_transcript(video_path, user_id):
         
         prompt = "Generate a transcript for this video in WebVTT format. Output ONLY the WebVTT text, starting with 'WEBVTT'."
         response = client.models.generate_content(model=gemini_model, contents=[file_ref, prompt])
-        vtt_content = response.text.strip()
-        if vtt_content.startswith("```"):
-            vtt_content = vtt_content.split('\n', 1)[1].rsplit('\n', 1)[0].replace('webvtt', '').strip()
-        if not vtt_content.startswith("WEBVTT"): vtt_content = "WEBVTT\n\n" + vtt_content
+        vtt_content = convert_to_vtt(response.text)
         
         with open(base_path + ".vtt", 'w', encoding='utf-8') as f: f.write(vtt_content)
         return vtt_content
@@ -1865,16 +1940,14 @@ def get_or_generate_transcript(video_path, user_id):
             files = {'file': (os.path.basename(audio_path), audio_file, 'audio/wav')}
             resp = requests.post(local_whisper_url, files=files, data={'response_format': 'vtt'}, timeout=300)
             resp.raise_for_status()
-            content = resp.text
-            try:
-                if 'text' in resp.json(): content = "WEBVTT\n\n00:00:00.000 --> 00:10:00.000\n" + resp.json()['text']
-            except: pass
+            content = convert_to_vtt(resp.text)
             with open(base_path + ".vtt", 'w', encoding='utf-8') as f: f.write(content)
         
         if os.path.exists(audio_path): os.remove(audio_path)
         return content
     
     raise Exception("Transcript not found and generation failed.")
+
 
 @app.route('/api/ai_chat_context', methods=['POST'])
 @login_required
@@ -2164,16 +2237,7 @@ def generate_transcript():
                 contents=[file_ref, prompt]
             )
             
-            vtt_content = response.text.strip()
-            
-            # Cleanup markdown
-            if vtt_content.startswith("```"):
-                vtt_content = vtt_content.split('\n', 1)[1]
-                vtt_content = vtt_content.rsplit('\n', 1)[0]
-                vtt_content = vtt_content.replace('webvtt', '').strip()
-                
-            if not vtt_content.startswith("WEBVTT"):
-                vtt_content = "WEBVTT\n\n" + vtt_content
+            vtt_content = convert_to_vtt(response.text)
                 
             with open(vtt_path, 'w', encoding='utf-8') as f:
                 f.write(vtt_content)
@@ -2214,19 +2278,7 @@ def generate_transcript():
                 resp = requests.post(local_whisper_url, files=files, data=data, timeout=300)
                 resp.raise_for_status()
                 
-                # Check content type or guess
-                content = resp.text
-                
-                # If server ignores response_format and returns JSON
-                try:
-                    json_resp = resp.json()
-                    if 'text' in json_resp:
-                        # Fallback: We got raw text. Creating a fake VTT (no timestamps) is bad, 
-                        # but better than crashing. However, usually local servers support 'vtt' or 'srt'.
-                        # Let's assume the user configured a server that supports standard OpenAI API.
-                        content = "WEBVTT\n\n00:00:00.000 --> 00:10:00.000\n" + json_resp['text']
-                except:
-                    pass # It wasn't JSON, assume it is the requested VTT text
+                content = convert_to_vtt(resp.text)
                 
                 with open(vtt_path, 'w', encoding='utf-8') as f:
                     f.write(content)

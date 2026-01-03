@@ -750,8 +750,11 @@
                 </ul>
             </div>
             <div id="transcript" class="tab-content">
-                <div class="notes-toolbar">
-                    <input type="text" id="transcript-search" placeholder="Search in transcript..." style="width: 100%; padding: 8px; border-radius: 4px; border: 1px solid var(--border-color); background: var(--bg-sidebar); color: var(--text-main);">
+                <div class="notes-toolbar" style="display: flex; gap: 10px;">
+                    <input type="text" id="transcript-search" placeholder="Search in transcript..." style="flex: 1; padding: 8px; border-radius: 4px; border: 1px solid var(--border-color); background: var(--bg-sidebar); color: var(--text-main);">
+                    {% if ai_enabled %}
+                    <button class="timestamp-btn" onclick="generateTranscript(currentVideoPath)" title="Force regenerate transcript using AI">🔄 Regenerate</button>
+                    {% endif %}
                 </div>
                 <div id="transcript-container" style="line-height: 1.8;">
                     <p style="color: var(--text-secondary);">Select a video with subtitles to view transcript.</p>
