@@ -152,13 +152,21 @@
         }
         .settings-link:hover { background: var(--hover-bg); }
         
+        .btn-icon {
+            display: inline-block;
+            font-size: 1.2em;
+            vertical-align: middle;
+            line-height: 1;
+        }
+
         .theme-toggle {
             background: none;
             border: none;
             cursor: pointer;
-            font-size: 1.5em;
             padding: 0 5px;
             color: var(--text-main);
+            display: flex;
+            align-items: center;
         }
 
         /* Search Section */
@@ -364,6 +372,11 @@
             .user-name-text { display: none; }
         }
 
+        @media (max-width: 950px) and (min-width: 769px) {
+            .btn-text { display: none; }
+            .settings-link { padding: 8px 12px; }
+        }
+
         @media (max-width: 768px) {
             body { padding: 10px; }
             .header-section { gap: 15px; align-items: center; }
@@ -424,16 +437,16 @@
                         </div>
                         <span class="user-name-text" style="font-weight: 500;">{{ current_user.name }}</span>
                     </div>
-                    <a href="/analytics" class="settings-link" style="background: #2e7d32; color: white; border: none;" title="View your learning statistics and AI usage">📊 Stats</a>
-                    <a href="/resources" class="settings-link" title="Access all course files and documents">📂 Vault</a>
-                    <a href="/logout" class="settings-link" style="border-color: #d32f2f; color: #d32f2f;" title="Sign out of your account">Logout</a>
+                    <a href="/analytics" class="settings-link" style="background: #2e7d32; color: white; border: none;" title="View your learning statistics and AI usage"><span class="btn-icon">📊</span> <span class="btn-text">Stats</span></a>
+                    <a href="/resources" class="settings-link" title="Access all course files and documents"><span class="btn-icon">📂</span> <span class="btn-text">Vault</span></a>
+                    <a href="/logout" class="settings-link" style="border-color: #d32f2f; color: #d32f2f;" title="Sign out of your account"><span class="btn-icon">🚪</span> <span class="btn-text">Logout</span></a>
                 {% else %}
                     <span style="margin-right: 10px; color: #666;">(Anonymous)</span>
                     <a href="/login" class="settings-link" style="background: var(--primary-color); color: white; border: none;" title="Log in to your account">Login</a>
                 {% endif %}
-                <button class="theme-toggle" onclick="toggleTheme()" title="Switch between Light and Dark mode">🌓</button>
-                <a href="/study" class="settings-link" style="background: var(--bg-card); border-color: var(--primary-color); color: var(--primary-color);" title="Review your flashcards">🧠 Study</a>
-                <a href="/settings" class="settings-link" title="Manage application settings and course data">⚙ Settings</a>
+                <button class="theme-toggle" onclick="toggleTheme()" title="Switch between Light and Dark mode"><span class="btn-icon">🌓</span></button>
+                <a href="/study" class="settings-link" style="background: var(--bg-card); border-color: var(--primary-color); color: var(--primary-color);" title="Review your flashcards"><span class="btn-icon">🧠</span> <span class="btn-text">Study</span></a>
+                <a href="/settings" class="settings-link" title="Manage application settings and course data"><span class="btn-icon">⚙️</span> <span class="btn-text">Settings</span></a>
             </div>
 
             <button class="hamburger-btn" onclick="toggleMenu()" title="Open Menu">☰</button>
@@ -460,16 +473,16 @@
                         <span style="font-size: 0.8em; color: var(--text-secondary);">Member</span>
                     </div>
                 </div>
-                <a href="/analytics" class="settings-link" style="background: #2e7d32; color: white; border: none; margin-top: 10px;">📊 Stats</a>
-                <a href="/resources" class="settings-link">📂 Vault</a>
-                <a href="/logout" class="settings-link" style="border-color: #d32f2f; color: #d32f2f;">Logout</a>
+                <a href="/analytics" class="settings-link" style="background: #2e7d32; color: white; border: none; margin-top: 10px;"><span class="btn-icon">📊</span> Stats</a>
+                <a href="/resources" class="settings-link"><span class="btn-icon">📂</span> Vault</a>
+                <a href="/logout" class="settings-link" style="border-color: #d32f2f; color: #d32f2f;"><span class="btn-icon">🚪</span> Logout</a>
             {% else %}
                 <a href="/login" class="settings-link" style="background: var(--primary-color); color: white; border: none;">Login</a>
             {% endif %}
             
-            <button class="settings-link" onclick="toggleTheme(); toggleMenu();" style="cursor: pointer; background: var(--bg-card);">🌓 Toggle Theme</button>
-            <a href="/study" class="settings-link" style="background: var(--bg-card); border-color: var(--primary-color); color: var(--primary-color);">🧠 Study Deck</a>
-            <a href="/settings" class="settings-link">⚙ Settings</a>
+            <button class="settings-link" onclick="toggleTheme(); toggleMenu();" style="cursor: pointer; background: var(--bg-card);"><span class="btn-icon">🌓</span> Toggle Theme</button>
+            <a href="/study" class="settings-link" style="background: var(--bg-card); border-color: var(--primary-color); color: var(--primary-color);"><span class="btn-icon">🧠</span> Study Deck</a>
+            <a href="/settings" class="settings-link"><span class="btn-icon">⚙️</span> Settings</a>
         </div>
 
         <div class="search-section">

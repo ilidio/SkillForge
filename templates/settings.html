@@ -217,6 +217,13 @@
         .edit-btn { color: var(--primary-color); border-color: var(--primary-color); }
         .edit-btn:hover { background-color: var(--primary-color); color: white; }
 
+        .btn-icon {
+            display: inline-block;
+            font-size: 1.2em;
+            vertical-align: middle;
+            line-height: 1;
+        }
+
         /* Modal Styles */
         .modal {
             display: none; 
@@ -289,7 +296,7 @@
             <img src="/static/images/logo_mobile.png" alt="SkillForge" class="logo-img logo-mobile-light">
             <img src="/static/images/logo_dark_mobile.png" alt="SkillForge" class="logo-img logo-mobile-dark">
             <h1>Settings & Progress</h1>
-            <button class="theme-toggle" onclick="toggleTheme()" title="Toggle Dark Mode">🌓</button>
+            <button class="theme-toggle" onclick="toggleTheme()" title="Toggle Dark Mode"><span class="btn-icon">🌓</span></button>
         </div>
 
         <div class="global-actions" style="border-color: var(--primary-color); background: var(--bg-card);">
@@ -302,7 +309,7 @@
                             {{ current_user.name[0] | upper }}
                         {% endif %}
                     </div>
-                    <div style="position: absolute; bottom: 0; right: 0; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-size: 0.8em;">📸</div>
+                    <div style="position: absolute; bottom: 0; right: 0; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-size: 0.8em;"><span class="btn-icon">📸</span></div>
                 </div>
                 <div style="flex: 1;">
                     <div style="font-weight: bold; font-size: 1.2em;">{{ current_user.name }}</div>
@@ -346,7 +353,7 @@
                         <select id="geminiModel" style="padding: 8px; border: 1px solid var(--border-color); border-radius: 4px; min-width: 150px;">
                             <option value="{{ gemini_model }}" selected>{{ gemini_model }} (Saved)</option>
                         </select>
-                        <button class="btn" onclick="fetchModels()" title="Refresh Models from API" style="padding: 8px;">↻</button>
+                        <button class="btn" onclick="fetchModels()" title="Refresh Models from API" style="padding: 8px;"><span class="btn-icon">↻</span></button>
                     </div>
                 </div>
 

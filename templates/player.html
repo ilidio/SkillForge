@@ -255,6 +255,13 @@
             border-bottom-color: var(--tab-active-border);
         }
 
+        .btn-icon {
+            display: inline-block;
+            font-size: 1.2em;
+            vertical-align: middle;
+            line-height: 1;
+        }
+
         @media (max-width: 1000px) {
             .tab-text { display: none; }
             .tab-btn { padding: 12px 15px; font-size: 1.2em; }
@@ -813,11 +820,11 @@
                 <button class="control-btn speed-btn" onclick="setSpeed(3)" title="3x Speed" style="font-size: 0.8em; padding: 4px 8px; border:none;">3x</button>
             </div>
 
-            <button class="control-btn cinema-btn" onclick="toggleCinemaMode()" title="Cinema Mode (Lights Off)">💡</button>
-            <button class="control-btn" onclick="takeSnapshot()" title="Capture Frame to Notes">📸</button>
-            <button class="control-btn" id="rate-btn" onclick="openMastery()" title="Rate Mastery" style="display: none;">⭐ <span class="control-text">Rate</span></button>
-            <button class="control-btn" onclick="openInfo()" title="Course Info">ⓘ <span class="control-text">Info</span></button>
-            <button class="control-btn" onclick="toggleTheme()" title="Toggle Dark Mode">🌓</button>
+            <button class="control-btn cinema-btn" onclick="toggleCinemaMode()" title="Cinema Mode (Lights Off)"><span class="btn-icon">💡</span></button>
+            <button class="control-btn" onclick="takeSnapshot()" title="Capture Frame to Notes"><span class="btn-icon">📸</span></button>
+            <button class="control-btn" id="rate-btn" onclick="openMastery()" title="Rate Mastery" style="display: none;"><span class="btn-icon">⭐</span> <span class="control-text">Rate</span></button>
+            <button class="control-btn" onclick="openInfo()" title="Course Info"><span class="btn-icon">ⓘ</span> <span class="control-text">Info</span></button>
+            <button class="control-btn" onclick="toggleTheme()" title="Toggle Dark Mode"><span class="btn-icon">🌓</span></button>
             <button class="player-hamburger-btn" onclick="togglePlayerMenu()">☰</button>
         </div>
     </header>
@@ -876,23 +883,14 @@
         <div class="tabs-container" id="tabsContainer">
             <div class="tabs-header">
                 <div class="tab-buttons">
-                    <button class="tab-btn active" onclick="openTab('notes')" title="My Notes">📝 <span class="tab-text">My Notes</span></button>
-                    <button class="tab-btn" onclick="openTab('resources')" title="Resources">📂 <span class="tab-text">Resources</span></button>
-                    <button class="tab-btn" onclick="openTab('transcript')" title="Transcript">📜 <span class="tab-text">Transcript</span></button>
-                    <button class="tab-btn" onclick="openTab('chapters-tab')" title="Chapters">🎞️ <span class="tab-text">Chapters</span></button>
-                    <button class="tab-btn" onclick="openTab('docs-tab')" title="Documents">📄 <span class="tab-text">Documents</span></button>
-                    <button class="tab-btn" onclick="openTab('knowledge-map-tab')" title="Knowledge Map">🕸️ <span class="tab-text">Knowledge Map</span></button>
-                    <button class="tab-btn" onclick="openTab('flashcards')" title="Flashcards">🧠 <span class="tab-text">Flashcards</span></button>
-                    <button class="tab-btn" id="quiz-tab-btn" onclick="openTab('quiz-tab')" style="display: none;" title="Quiz">📝 <span class="tab-text">Quiz</span></button>
-                    {% if ai_enabled %}
-                    <button class="tab-btn" onclick="openTab('ai-assistant')" title="AI Assistant">✨ <span class="tab-text">AI Assistant</span></button>
-                    {% endif %}
+                    <button class="tab-btn active" onclick="openTab('notes')" title="My Notes"><span class="btn-icon">📝</span> <span class="tab-text">My Notes</span></button>
+                    <button class="tab-btn" onclick="openTab('resources')" title="Resources"><span class="btn-icon">📂</span> <span class="tab-text">Resources</span></button>
+                    <button class="tab-btn" onclick="openTab('transcript')" title="Transcript"><span class="btn-icon">📜</span> <span class="tab-text">Transcript</span></button>
+                    <button class="tab-btn" id="quiz-tab-btn" onclick="openTab('quiz-tab')" style="display: none;" title="Quiz"><span class="btn-icon">📝</span> <span class="tab-text">Quiz</span></button>
+                    <button class="tab-btn" onclick="openTab('flashcards')" title="Flashcards"><span class="btn-icon">🎴</span> <span class="tab-text">Flashcards</span></button>
+                    <button class="tab-btn" onclick="openTab('bookmarks')" title="Bookmarks"><span class="btn-icon">🔖</span> <span class="tab-text">Bookmarks</span></button>
+                    <button class="tab-btn" onclick="openTab('chat')" title="AI Chat"><span class="btn-icon">🤖</span> <span class="tab-text">AI Chat</span></button>
                 </div>
-                <button class="toggle-tabs-btn" onclick="toggleTabs()" title="Minimize/Maximize">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                        <polyline points="6 9 12 15 18 9"></polyline>
-                    </svg>
-                </button>
             </div>
             <div id="notes" class="tab-content active">
                 <div class="notes-toolbar" style="display: flex; gap: 10px; flex-wrap: wrap;">
