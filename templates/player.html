@@ -262,7 +262,7 @@
             line-height: 1;
         }
 
-        @media (max-width: 1000px) {
+        @media (max-width: 1600px) {
             .tab-text { display: none; }
             .tab-btn { padding: 12px 15px; font-size: 1.2em; }
         }
@@ -757,6 +757,54 @@
         .toast-title { font-weight: bold; }
         .toast-desc { font-size: 0.85em; color: var(--text-secondary); }
 
+        /* Restart Overlay */
+        .restart-overlay {
+            position: absolute;
+            bottom: 80px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 10px 15px;
+            border-radius: 6px;
+            display: none;
+            align-items: center;
+            gap: 15px;
+            z-index: 100;
+            border: 1px solid rgba(255,255,255,0.2);
+            backdrop-filter: blur(4px);
+            font-size: 0.9em;
+        }
+        .restart-overlay button {
+            background: var(--primary-color);
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+
+        /* AI Loading Spinner */
+        .ai-loader {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin: 15px 0;
+            color: var(--text-secondary);
+            font-style: italic;
+        }
+        .spinner {
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(80, 34, 195, 0.2);
+            border-top-color: var(--primary-color);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
         /* Responsive Player Adjustments */
         @media (max-width: 1024px) {
             :root { --sidebar-width: 280px; }
@@ -811,6 +859,12 @@
             {% if is_completed %}
             <a href="/certificate/{{ course.id }}" class="control-btn" style="background: #ffb700; color: #000; text-decoration: none; font-weight: bold;">🏆 <span class="control-text">Certificate</span></a>
             {% endif %}
+
+            {% if last_played_path and last_played_path != "None" %}
+            <button class="control-btn" id="resume-session-btn" onclick="restoreSession()" title="Resume where you left off" style="background: var(--primary-color); color: white; border: none;">
+                <span class="btn-icon">🚀</span> <span class="control-text">Restore Session</span>
+            </button>
+            {% endif %}
             
             <div class="speed-bar" style="display: flex; gap: 5px; background: rgba(0,0,0,0.05); padding: 4px; border-radius: 4px; border: 1px solid var(--border-color);">
                 <button class="control-btn speed-btn" onclick="setSpeed(1)" title="1x Speed" style="font-size: 0.8em; padding: 4px 8px; border:none;">1x</button>
@@ -842,6 +896,12 @@
                     <track id="subtitles" kind="captions" label="English" srclang="en" default>
                     Your browser does not support the video tag.
                 </video>
+
+                <div id="restart-overlay" class="restart-overlay">
+                    <span>Resumed from <b id="resume-time-display">00:00</b></span>
+                    <button onclick="restartVideo()">Restart from 00:00</button>
+                    <span style="cursor:pointer; opacity:0.7;" onclick="this.parentElement.style.display='none'">✕</span>
+                </div>
 
             <style>
                 .star-rating { display: flex; gap: 10px; cursor: pointer; justify-content: center; padding: 20px 0; }
@@ -894,6 +954,11 @@
                     <button class="tab-btn" onclick="openTab('bookmarks')" title="Bookmarks"><span class="btn-icon">🔖</span> <span class="tab-text">Bookmarks</span></button>
                     <button class="tab-btn" onclick="openTab('chat')" title="AI Chat"><span class="btn-icon">🤖</span> <span class="tab-text">AI Chat</span></button>
                 </div>
+                <button class="toggle-tabs-btn" onclick="toggleTabs()" title="Minimize/Maximize">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="6 9 12 15 18 9"></polyline>
+                    </svg>
+                </button>
             </div>
             <div id="notes" class="tab-content active">
                 <div class="notes-toolbar" style="display: flex; gap: 10px; flex-wrap: wrap;">
@@ -967,11 +1032,12 @@
             {% if ai_enabled %}
             <div id="chat" class="tab-content">
                 <div class="ai-toolbar" style="display: flex; gap: 10px; margin-bottom: 10px; flex-wrap: wrap;">
-                    <button class="timestamp-btn" onclick="triggerAI('summarize')">📝 Summarize Video</button>
-                    <button class="timestamp-btn" onclick="triggerAI('quiz')">🎓 Generate Quiz</button>
-                    <button class="timestamp-btn" onclick="triggerAI('flashcards')">🧠 Auto-Flashcards</button>
-                    <button class="timestamp-btn" onclick="triggerAI('glossary')">📖 Glossary</button>
-                    <button class="timestamp-btn" onclick="triggerAI('mindmap')">🧬 Mind Map</button>
+                    <button class="timestamp-btn" onclick="triggerAI('summarize')"><span class="btn-icon">📝</span> Summarize Video</button>
+                    <button class="timestamp-btn" onclick="triggerAI('quiz')"><span class="btn-icon">🎓</span> Generate Quiz</button>
+                    <button class="timestamp-btn" onclick="triggerAI('flashcards')"><span class="btn-icon">🧠</span> Auto-Flashcards</button>
+                    <button class="timestamp-btn" onclick="triggerAI('glossary')"><span class="btn-icon">📖</span> Glossary</button>
+                    <button class="timestamp-btn" onclick="triggerAI('mindmap')"><span class="btn-icon">🧬</span> Mind Map</button>
+                    <button class="timestamp-btn" onclick="clearAIChat()" style="border-color: #ffcfcf; color: #d32f2f;">🗑️ Clear Chat</button>
                 </div>
                 <div id="ai-chat-output" style="flex: 1; border: 1px solid var(--border-color); border-radius: 4px; padding: 10px; background: var(--bg-sidebar); overflow-y: auto; height: 60%; margin-bottom: 10px;">
                     <div style="color: var(--text-secondary); text-align: center; margin-top: 20px;">
@@ -1044,6 +1110,7 @@
                         data-type="{{ video.item_type }}"
                         data-raw-path="{{ video.path }}"
                         data-mastery="{{ video.mastery_score }}"
+                        data-watched-time="{{ video.watched_time }}"
                         title="{{ video.title }}"
                         onclick="playVideo('/media/{{ video.path }}', '{{ video.title }}', this, '{{ video.item_type }}')">
                         
@@ -1058,10 +1125,9 @@
                             </div>
                             {% if video.item_type != 'quiz' %}
                             <div class="video-meta">
-                                <span>{{ video.duration | format_time }}</span>
-                                {% if video.watched_time > 0 %}
-                                <span>{{ video.watched_time | format_time }}</span>
-                                {% endif %}
+                                <span class="watched-time-text" title="Your current progress">{{ video.watched_time | format_time if video.watched_time > 0 else '00:00' }}</span>
+                                <span style="opacity: 0.5;"> / </span>
+                                <span class="total-duration-text" title="Total video duration">{{ video.duration | format_time }}</span>
                             </div>
                             <div class="mini-progress-bg">
                                 <div class="mini-progress-fill" style="width: {{ pct }}%"></div>
@@ -1174,6 +1240,31 @@
         function toggleSidebar() {
             const sidebar = document.getElementById('sidebar');
             sidebar.classList.toggle('minimized');
+        }
+
+        function restoreSession() {
+            if (lastPlayedPath && lastPlayedPath !== "None") {
+                const videoItems = document.querySelectorAll('.video-item');
+                let lastItem = null;
+                const targetPath = "/media/" + lastPlayedPath;
+                
+                videoItems.forEach(item => {
+                    if (item.getAttribute('data-path') === targetPath) {
+                        lastItem = item;
+                    }
+                });
+
+                if (lastItem) {
+                    playVideo(targetPath, lastItem.getAttribute('data-title'), lastItem, lastItem.getAttribute('data-type'), lastTimestamp);
+                    lastItem.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+            }
+        }
+
+        function restartVideo() {
+            player.currentTime = 0;
+            player.play();
+            document.getElementById('restart-overlay').style.display = 'none';
         }
 
         function openTab(tabName) {
@@ -1346,8 +1437,8 @@
         function generateChapters() {
             if (!currentVideoPath) return;
             const btn = event.target;
-            const originalText = btn.innerText;
-            btn.innerText = "Analyzing Transcript... (Please wait)";
+            const originalHTML = btn.innerHTML;
+            btn.innerHTML = '<div style="display:flex; align-items:center; gap:8px; justify-content:center;"><div class="spinner" style="width:14px; height:14px; border-width:2px;"></div> Analyzing Transcript...</div>';
             btn.disabled = true;
 
             fetch('/api/ai_chat_context', {
@@ -1360,7 +1451,7 @@
             })
             .then(res => res.json())
             .then(data => {
-                btn.innerText = originalText;
+                btn.innerHTML = originalHTML;
                 btn.disabled = false;
                 if (data.status === 'success') {
                     Swal.fire('Chapters Created!', 'The video has been indexed.', 'success');
@@ -1458,6 +1549,74 @@
         }
 
         // --- AI Assistant Logic ---
+        function loadAIHistory(videoPath) {
+            const container = document.getElementById('ai-chat-output');
+            container.innerHTML = '<div style="text-align:center; color:var(--text-secondary); margin-top:20px;">Loading history...</div>';
+            
+            fetch(`/api/get_ai_history?video_path=${encodeURIComponent(videoPath)}`)
+            .then(res => res.json())
+            .then(data => {
+                container.innerHTML = '';
+                if (data.length > 0) {
+                    data.forEach(item => {
+                        if (item.prompt && item.content_type === 'chat') {
+                            appendAIMessage('user', item.prompt);
+                        }
+                        
+                        if (item.content_type === 'quiz') {
+                            try {
+                                const quizData = JSON.parse(item.content);
+                                appendAIMessage('ai', `I generated a quiz titled: "<b>${quizData.title}</b>". <button class="btn" style="padding:2px 8px; font-size:0.8em; margin-top:5px; color:var(--primary-color); border-color:var(--primary-color);" onclick='renderQuiz(${JSON.stringify(quizData)})'>Start Quiz</button>`);
+                            } catch(e) {
+                                appendAIMessage('ai', "Error loading stored quiz.");
+                            }
+                        } else if (item.content_type === 'flashcards') {
+                            appendAIMessage('ai', `I previously created some auto-flashcards for this video. You can find them in your Study deck.`);
+                        } else {
+                            appendAIMessage('ai', item.content);
+                        }
+                    });
+                } else {
+                    container.innerHTML = `
+                        <div style="color: var(--text-secondary); text-align: center; margin-top: 20px;">
+                            Select a video and ask me anything about it!<br>
+                            "What is the main topic?"<br>
+                            "Explain the code example."
+                        </div>`;
+                }
+            });
+        }
+
+        function clearAIChat() {
+            if (!currentVideoPath) return;
+            Swal.fire({
+                title: 'Clear History?',
+                text: 'Delete all AI generated history for this video?',
+                icon: 'warning',
+                showCancelButton: true,
+                confirmButtonText: 'Yes, clear it'
+            }).then((result) => {
+                if (result.isConfirmed) {
+                    // We need to implement a "delete all history for this video" endpoint or just clear locally if we don't care about DB cleanup
+                    // Let's implement it properly.
+                    fetch('/api/delete_ai_history_for_video', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ video_path: currentVideoPath })
+                    })
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.status === 'success') {
+                            document.getElementById('ai-chat-output').innerHTML = `
+                                <div style="color: var(--text-secondary); text-align: center; margin-top: 20px;">
+                                    Chat cleared.
+                                </div>`;
+                        }
+                    });
+                }
+            });
+        }
+
         function handleAIChatEnter(e) {
             if (e.key === 'Enter') sendAIChat();
         }
@@ -1519,10 +1678,8 @@
             
             const loadingDiv = document.createElement('div');
             loadingDiv.id = 'ai-loading';
-            loadingDiv.innerText = 'AI is thinking...';
-            loadingDiv.style.fontStyle = 'italic';
-            loadingDiv.style.color = 'var(--text-secondary)';
-            loadingDiv.style.margin = '10px 0';
+            loadingDiv.className = 'ai-loader';
+            loadingDiv.innerHTML = '<div class="spinner"></div> AI is thinking...';
             document.getElementById('ai-chat-output').appendChild(loadingDiv);
             
             fetch('/api/ai_chat_context', {
@@ -1577,6 +1734,12 @@
                     context_type: action,
                     prompt: prompt
                 };
+
+                const loadingDiv = document.createElement('div');
+                loadingDiv.id = 'ai-trigger-loading';
+                loadingDiv.className = 'ai-loader';
+                loadingDiv.innerHTML = '<div class="spinner"></div> Working on your request...';
+                document.getElementById('ai-chat-output').appendChild(loadingDiv);
                 
                 fetch('/api/ai_chat_context', {
                     method: 'POST',
@@ -1585,6 +1748,7 @@
                 })
                 .then(res => res.json())
                 .then(data => {
+                    document.getElementById('ai-trigger-loading').remove();
                     if (data.status === 'success') {
                         if (action === 'flashcards' && data.flashcards_count) {
                             appendAIMessage('ai', `Success! I created ${data.flashcards_count} new flashcards for you. Check the Flashcards tab!`);
@@ -1724,9 +1888,8 @@
                     
                     const loadingDiv = document.createElement('div');
                     loadingDiv.id = 'ai-loading-global';
-                    loadingDiv.innerText = 'Analyzing course content...';
-                    loadingDiv.style.fontStyle = 'italic';
-                    loadingDiv.style.color = 'var(--text-secondary)';
+                    loadingDiv.className = 'ai-loader';
+                    loadingDiv.innerHTML = '<div class="spinner"></div> Analyzing course content...';
                     document.getElementById('ai-chat-output').appendChild(loadingDiv);
 
                     fetch('/api/ai_course_chat', {
@@ -1767,6 +1930,12 @@
                     openTab('chat');
                     appendAIMessage('ai', "Compiling your Master Study Guide... gathering all notes and context.");
                     
+                    const loadingDiv = document.createElement('div');
+                    loadingDiv.id = 'ai-bible-loading';
+                    loadingDiv.className = 'ai-loader';
+                    loadingDiv.innerHTML = '<div class="spinner"></div> Generating Master Study Guide... (30-60s)';
+                    document.getElementById('ai-chat-output').appendChild(loadingDiv);
+
                     fetch('/api/generate_course_bible', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -1774,6 +1943,7 @@
                     })
                     .then(res => res.json())
                     .then(data => {
+                        document.getElementById('ai-bible-loading').remove();
                         if (data.status === 'success') {
                             appendAIMessage('ai', "# 📚 MASTER COURSE BIBLE\n\n" + data.bible);
                         } else {
@@ -1804,6 +1974,12 @@
                     openTab('chat');
                     appendAIMessage('ai', `Generating a ${hoursPerWeek}-hour/week study plan for this course...`);
                     
+                    const loadingDiv = document.createElement('div');
+                    loadingDiv.id = 'ai-plan-loading';
+                    loadingDiv.className = 'ai-loader';
+                    loadingDiv.innerHTML = '<div class="spinner"></div> Creating study plan...';
+                    document.getElementById('ai-chat-output').appendChild(loadingDiv);
+
                     fetch('/api/ai_plan_course', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -1814,6 +1990,7 @@
                     })
                     .then(res => res.json())
                     .then(data => {
+                        document.getElementById('ai-plan-loading').remove();
                         if (data.status === 'success') {
                             appendAIMessage('ai', data.plan);
                         } else {
@@ -1864,38 +2041,9 @@
 
             // Resume Logic
             if (lastPlayedPath && lastPlayedPath !== "None") {
-                const videoItems = document.querySelectorAll('.video-item');
-                let lastItem = null;
-                const targetPath = "/media/" + lastPlayedPath;
-                
-                videoItems.forEach(item => {
-                    if (item.getAttribute('data-path') === targetPath) {
-                        lastItem = item;
-                    }
-                });
-
-                if (lastItem) {
-                    lastItem.classList.add('last-watched');
-                    const resumeContainer = document.getElementById('resume-container');
-                    const resumeBtn = document.getElementById('resume-btn');
-                    resumeContainer.style.display = 'block';
-                    
-                    resumeBtn.onclick = () => {
-                        lastItem.click();
-                        lastItem.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                        
-                        // Seek to timestamp after metadata loaded
-                        player.addEventListener('loadedmetadata', function onLoaded() {
-                            player.currentTime = lastTimestamp;
-                            if (savedSpeed) player.playbackRate = parseFloat(savedSpeed); // Re-apply speed
-                            player.removeEventListener('loadedmetadata', onLoaded);
-                        });
-                    };
-                    
-                    setTimeout(() => {
-                        lastItem.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                    }, 500);
-                }
+                const resumeContainer = document.getElementById('resume-container');
+                resumeContainer.style.display = 'block';
+                document.getElementById('resume-btn').onclick = restoreSession;
             }
         });
         
@@ -1905,13 +2053,14 @@
         });
 
         // --- Play Video Logic ---
-        function playVideo(src, title, activeElement, type = 'video') {
+        function playVideo(src, title, activeElement, type = 'video', initialTime = null) {
             // UI Updates
             document.querySelectorAll('.video-item').forEach(el => el.classList.remove('active'));
             activeElement.classList.add('active');
             activeElement.classList.add('watched');
             
             placeholder.style.display = 'none';
+            document.getElementById('restart-overlay').style.display = 'none';
             
             currentVideoPath = src.replace('/media/', '');
             currentVideoItem = activeElement;
@@ -1944,10 +2093,36 @@
                 subTrack.src = "/subtitle/" + src.replace('/media/', '');
                 
                 player.play();
+
+                // Resume Logic
+                let resumePos = initialTime;
+                if (resumePos === null) {
+                    const savedTime = parseFloat(activeElement.getAttribute('data-watched-time') || '0');
+                    if (savedTime > 10) resumePos = savedTime; // Only resume if > 10s
+                }
+
+                if (resumePos) {
+                    player.addEventListener('loadedmetadata', function onLoaded() {
+                        player.currentTime = resumePos;
+                        player.removeEventListener('loadedmetadata', onLoaded);
+                        
+                        // Show restart overlay
+                        const m = Math.floor(resumePos / 60);
+                        const s = Math.floor(resumePos % 60);
+                        document.getElementById('resume-time-display').innerText = `${m}:${s.toString().padStart(2, '0')}`;
+                        document.getElementById('restart-overlay').style.display = 'flex';
+                        
+                        // Auto-hide after 10s
+                        setTimeout(() => {
+                            document.getElementById('restart-overlay').style.display = 'none';
+                        }, 10000);
+                    });
+                }
                 
                 saveProgress(currentVideoPath, title, 0);
                 loadTranscript(currentVideoPath);
                 loadChapters(currentVideoPath);
+                loadAIHistory(currentVideoPath);
             }
             
             const moduleList = activeElement.closest('.video-list');
@@ -2035,8 +2210,8 @@
         
         function generateTranscript(videoPath) {
             const btn = event.target;
-            const originalText = btn.innerText;
-            btn.innerText = "Processing... (This may take a while)";
+            const originalHTML = btn.innerHTML;
+            btn.innerHTML = '<div style="display:flex; align-items:center; gap:8px; justify-content:center;"><div class="spinner" style="width:14px; height:14px; border-width:2px;"></div> Processing...</div>';
             btn.disabled = true;
             
             fetch('/api/generate_transcript', {
@@ -2051,13 +2226,13 @@
                     loadTranscript(videoPath); // Reload to show it
                 } else {
                     Swal.fire('Error', "Error: " + data.message, 'error');
-                    btn.innerText = originalText;
+                    btn.innerHTML = originalHTML;
                     btn.disabled = false;
                 }
             })
             .catch(err => {
                 Swal.fire('Error', "Error: " + err, 'error');
-                btn.innerText = originalText;
+                btn.innerHTML = originalHTML;
                 btn.disabled = false;
             });
         }
@@ -2086,7 +2261,38 @@
         
         player.addEventListener('timeupdate', () => {
             syncTranscript();
+            updateMiniProgress();
         });
+
+        function formatTime(sec) {
+            if (!sec) return '00:00';
+            const s = Math.floor(sec);
+            const hours = Math.floor(s / 3600);
+            const minutes = Math.floor((s % 3600) / 60);
+            const seconds = s % 60;
+            if (hours > 0) {
+                return `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+            }
+            return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+        }
+
+        function updateMiniProgress() {
+            if (!currentVideoItem || player.duration === 0) return;
+            const pct = (player.currentTime / player.duration) * 100;
+            
+            // Update progress bar
+            const fill = currentVideoItem.querySelector('.mini-progress-fill');
+            if (fill) {
+                fill.style.width = pct + '%';
+                currentVideoItem.classList.add('started');
+            }
+
+            // Update watched time text
+            const timeText = currentVideoItem.querySelector('.watched-time-text');
+            if (timeText) {
+                timeText.innerText = formatTime(player.currentTime);
+            }
+        }
         
         function syncTranscript() {
             if (!transcriptData.length) return;

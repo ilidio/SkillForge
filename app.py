@@ -514,6 +514,17 @@ def init_db():
             daily_goal_mins INTEGER DEFAULT 30,
             FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
         );
+
+        CREATE TABLE IF NOT EXISTS ai_generated_content (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            video_path TEXT,
+            content_type TEXT,
+            content TEXT,
+            prompt TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+        );
     ''')
 
     # Migrations
@@ -1857,6 +1868,7 @@ def reset_progress():
             conn.execute('DELETE FROM bookmarks WHERE user_id = ?', (user_id,))
             conn.execute('DELETE FROM video_notes WHERE user_id = ?', (user_id,))
             conn.execute('DELETE FROM flashcards WHERE user_id = ?', (user_id,))
+            conn.execute('DELETE FROM ai_generated_content WHERE user_id = ?', (user_id,))
         else:
             conn.execute('DELETE FROM course_progress WHERE user_id IS NULL')
             conn.execute('DELETE FROM watched_videos WHERE user_id IS NULL')
@@ -2282,11 +2294,19 @@ def ai_chat_context():
         """
         final_prompt = f"Here are my rough notes:\n{prompt}\n\nPlease polish them."
 
-    # 4. Call AI Service
+        # 4. Call AI Service
     try:
         ai_text = call_ai_service(provider, api_key, model_name, local_url, system_instruction, final_prompt, user_id, context_type)
         ai_text = ai_text.strip()
         
+        # Save to History (except for chapters which are handled in their own table)
+        if context_type not in ['chapters']:
+            conn = get_db_connection()
+            conn.execute('INSERT INTO ai_generated_content (user_id, video_path, content_type, content, prompt) VALUES (?, ?, ?, ?, ?)',
+                         (user_id, video_path, context_type, ai_text, prompt))
+            conn.commit()
+            conn.close()
+
         # Post-process for specific actions
         if context_type == 'flashcards':
             # Clean potential markdown
@@ -2349,6 +2369,58 @@ def ai_chat_context():
         
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/get_ai_history', methods=['GET'])
+@login_required
+def get_ai_history():
+    user_id = current_user.id
+    video_path = request.args.get('video_path')
+    if not video_path:
+        return jsonify({"status": "error", "message": "Missing video_path"}), 400
+        
+    conn = get_db_connection()
+    rows = conn.execute('SELECT * FROM ai_generated_content WHERE user_id=? AND video_path=? ORDER BY created_at ASC', (user_id, video_path)).fetchall()
+    conn.close()
+    return jsonify([dict(r) for r in rows])
+
+@app.route('/api/get_all_ai_history', methods=['GET'])
+@login_required
+def get_all_ai_history():
+    user_id = current_user.id
+    conn = get_db_connection()
+    rows = conn.execute('''
+        SELECT h.*, v.title as video_title, c.title as course_title 
+        FROM ai_generated_content h
+        LEFT JOIN videos v ON h.video_path = v.path
+        LEFT JOIN modules m ON v.module_id = m.id
+        LEFT JOIN courses c ON m.course_id = c.id
+        WHERE h.user_id=? 
+        ORDER BY h.created_at DESC
+    ''', (user_id,)).fetchall()
+    conn.close()
+    return jsonify([dict(r) for r in rows])
+
+@app.route('/api/delete_ai_history', methods=['POST'])
+@login_required
+def delete_ai_history():
+    user_id = current_user.id
+    history_id = request.json.get('id')
+    conn = get_db_connection()
+    conn.execute('DELETE FROM ai_generated_content WHERE id=? AND user_id=?', (history_id, user_id))
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "success"})
+
+@app.route('/api/delete_ai_history_for_video', methods=['POST'])
+@login_required
+def delete_ai_history_for_video():
+    user_id = current_user.id
+    video_path = request.json.get('video_path')
+    conn = get_db_connection()
+    conn.execute('DELETE FROM ai_generated_content WHERE video_path=? AND user_id=?', (video_path, user_id))
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "success"})
 
 @app.route('/api/ai_course_chat', methods=['POST'])
 @login_required
@@ -2597,7 +2669,7 @@ def generate_transcript():
             prompt = "Generate a transcript for this video in WebVTT format. Output ONLY the WebVTT text, starting with 'WEBVTT'. No conversational text."
             
             response = client.models.generate_content(
-                model=gemini_model,
+                model=model_name,
                 contents=[file_ref, prompt]
             )
             
@@ -2610,7 +2682,7 @@ def generate_transcript():
             try:
                 conn = get_db_connection()
                 conn.execute('INSERT INTO ai_logs (user_id, provider, model, action) VALUES (?, ?, ?, ?)', 
-                             (user_id, 'gemini', gemini_model, 'transcribe_video'))
+                             (user_id, 'gemini', model_name, 'transcribe_video'))
                 conn.commit()
                 conn.close()
             except: pass

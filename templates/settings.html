@@ -380,6 +380,14 @@
             </div>
         </div>
 
+        <div class="global-actions" style="border-color: #9c27b0; background: var(--bg-card);">
+            <div>
+                <div class="danger-label" style="color: #9c27b0;">AI Generation History</div>
+                <div style="font-size: 0.9em; color: var(--text-secondary); margin-top: 4px;">Centralized log of all summaries, glossaries, and AI chats.</div>
+            </div>
+            <button class="btn" onclick="openAIHistoryManager()" style="color: #9c27b0; border-color: #9c27b0;">Manage AI History</button>
+        </div>
+
         <div class="global-actions" style="border-color: #4caf50; background: var(--bg-card);">
             <div>
                 <div class="danger-label" style="color: #4caf50;">Learning Performance</div>
@@ -461,6 +469,23 @@
         </div>
     </div>
 
+    <!-- AI History Modal -->
+    <div id="aiHistoryModal" class="modal">
+        <div class="modal-content" style="max-height: 80vh; display: flex; flex-direction: column;">
+            <div class="modal-header">
+                <h2>Manage AI History</h2>
+                <span class="close-modal" onclick="closeAIHistoryManager()">&times;</span>
+            </div>
+            <div style="margin-bottom: 15px;">
+                <input type="text" id="aiHistorySearch" placeholder="Search history..." onkeyup="filterAIHistory()" 
+                       style="width:100%; padding:10px; border:1px solid var(--border-color); border-radius:4px; box-sizing:border-box; background: var(--bg-body); color: var(--text-main);">
+            </div>
+            <div id="aiHistoryContent" style="overflow-y: auto; flex: 1;">
+                <div style="text-align: center; padding: 20px;">Loading history...</div>
+            </div>
+        </div>
+    </div>
+
     <!-- Quill JS -->
     <script src="https://cdn.quilljs.com/1.3.6/quill.js"></script>
     <script>
@@ -520,6 +545,119 @@
         
         function closeProgressManager() {
             document.getElementById('progressModal').style.display = 'none';
+        }
+
+        // AI History Functions
+        function openAIHistoryManager() {
+            document.getElementById('aiHistoryModal').style.display = 'block';
+            document.getElementById('aiHistoryContent').innerHTML = '<div style="text-align: center; padding: 20px;">Loading AI history...</div>';
+            
+            fetch('/api/get_all_ai_history')
+            .then(res => res.json())
+            .then(data => {
+                renderAIHistoryList(data);
+            });
+        }
+
+        function closeAIHistoryManager() {
+            document.getElementById('aiHistoryModal').style.display = 'none';
+        }
+
+        function renderAIHistoryList(history) {
+            const container = document.getElementById('aiHistoryContent');
+            container.innerHTML = '';
+            
+            if (history.length === 0) {
+                container.innerHTML = '<div style="padding: 20px; text-align:center;">No AI history found.</div>';
+                return;
+            }
+            
+            history.forEach(item => {
+                const row = document.createElement('div');
+                row.className = 'ai-history-item';
+                row.style.cssText = 'display: flex; justify-content: space-between; align-items: center; padding: 15px; border-bottom: 1px solid var(--border-color);';
+                row.setAttribute('data-search', (item.course_title + ' ' + item.video_title + ' ' + item.content_type).toLowerCase());
+                
+                const info = document.createElement('div');
+                info.style.flex = '1';
+                
+                const date = item.created_at.substring(0, 16).replace('T', ' ');
+                const typeLabel = item.content_type.toUpperCase();
+                
+                info.innerHTML = `
+                    <div style="font-weight: bold;">${item.video_title || 'General Chat'}</div>
+                    <div style="font-size: 0.85em; color: var(--text-secondary); margin-top: 4px;">
+                        <span style="color: var(--primary-color); font-weight:bold;">${typeLabel}</span> • ${item.course_title || 'No Course'} • ${date}
+                    </div>
+                `;
+                
+                const actions = document.createElement('div');
+                actions.style.display = 'flex';
+                actions.style.gap = '10px';
+                
+                const viewBtn = document.createElement('button');
+                viewBtn.innerText = 'View';
+                viewBtn.className = 'btn';
+                viewBtn.onclick = () => viewAIHistoryContent(item);
+                
+                const delBtn = document.createElement('button');
+                delBtn.innerText = 'Delete';
+                delBtn.className = 'btn';
+                delBtn.style.color = '#d32f2f';
+                delBtn.style.borderColor = '#ffcfcf';
+                delBtn.onclick = () => deleteAIHistory(item.id, row);
+                
+                actions.appendChild(viewBtn);
+                actions.appendChild(delBtn);
+                
+                row.appendChild(info);
+                row.appendChild(actions);
+                container.appendChild(row);
+            });
+        }
+
+        function viewAIHistoryContent(item) {
+            Swal.fire({
+                title: item.content_type.toUpperCase(),
+                html: `<div style="text-align:left; max-height:400px; overflow-y:auto; font-family:monospace; white-space:pre-wrap; background:var(--bg-body); padding:15px; border-radius:4px;">${item.content}</div>`,
+                width: '80%'
+            });
+        }
+
+        function deleteAIHistory(id, rowElement) {
+            Swal.fire({
+                title: 'Delete this history?',
+                icon: 'warning',
+                showCancelButton: true,
+                confirmButtonColor: '#d33',
+                confirmButtonText: 'Yes, delete it'
+            }).then((result) => {
+                if (result.isConfirmed) {
+                    fetch('/api/delete_ai_history', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ id: id }),
+                    })
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.status === 'success') {
+                            rowElement.remove();
+                        }
+                    });
+                }
+            });
+        }
+
+        function filterAIHistory() {
+            const query = document.getElementById('aiHistorySearch').value.toLowerCase();
+            const items = document.querySelectorAll('.ai-history-item');
+            items.forEach(item => {
+                if (item.getAttribute('data-search').includes(query)) {
+                    item.style.display = 'flex';
+                } else {
+                    item.style.display = 'none';
+                }
+            });
         }
         
         function renderProgressList(courseId, modules) {
@@ -617,6 +755,9 @@
             }
             if (event.target == document.getElementById('progressModal')) {
                 closeProgressManager();
+            }
+            if (event.target == document.getElementById('aiHistoryModal')) {
+                closeAIHistoryManager();
             }
         }
 
