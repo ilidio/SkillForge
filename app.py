@@ -914,7 +914,7 @@ def settings():
     user_id = get_current_user_id()
     
     # Get API Key & Model & AI Enabled Status
-    settings_rows = conn.execute("SELECT key, value FROM user_settings WHERE user_id=? AND key IN ('gemini_api_key', 'gemini_model', 'local_model', 'ai_features_enabled', 'ai_provider', 'local_ai_url', 'local_whisper_url')", (user_id,)).fetchall()
+    settings_rows = conn.execute("SELECT key, value FROM user_settings WHERE user_id=? AND key IN ('gemini_api_key', 'gemini_model', 'local_model', 'ai_features_enabled', 'ai_provider', 'local_ai_url', 'local_whisper_url', 'auto_transcript')", (user_id,)).fetchall()
     settings_map = {row['key']: row['value'] for row in settings_rows}
     
     api_key = settings_map.get('gemini_api_key', '')
@@ -926,6 +926,7 @@ def settings():
         gemini_model = 'gemini-2.0-flash'
     
     ai_enabled = settings_map.get('ai_features_enabled', 'true') == 'true'
+    auto_transcript = settings_map.get('auto_transcript', 'false') == 'true'
     ai_provider = settings_map.get('ai_provider', 'gemini')
     local_ai_url = settings_map.get('local_ai_url', 'http://localhost:1234/v1/chat/completions')
     local_whisper_url = settings_map.get('local_whisper_url', 'http://localhost:9000/v1/audio/transcriptions')
@@ -954,7 +955,7 @@ def settings():
             'percentage': stats['percentage']
         })
     conn.close()
-    return render_template('settings.html', courses=courses_data, api_key=api_key, gemini_model=gemini_model, local_model=local_model, ai_enabled=ai_enabled, ai_provider=ai_provider, local_ai_url=local_ai_url, local_whisper_url=local_whisper_url, quiz_correct=quiz_correct, quiz_total=quiz_total, daily_goal=daily_goal)
+    return render_template('settings.html', courses=courses_data, api_key=api_key, gemini_model=gemini_model, local_model=local_model, ai_enabled=ai_enabled, auto_transcript=auto_transcript, ai_provider=ai_provider, local_ai_url=local_ai_url, local_whisper_url=local_whisper_url, quiz_correct=quiz_correct, quiz_total=quiz_total, daily_goal=daily_goal)
 
 @app.route('/course/<int:course_id>')
 def player(course_id):
@@ -1032,8 +1033,11 @@ def player(course_id):
     is_completed = (len(watched_paths) >= total_videos and total_videos > 0)
     
     # Check if AI is enabled
-    ai_setting = conn.execute("SELECT value FROM user_settings WHERE user_id=? AND key='ai_features_enabled'", (user_id,)).fetchone()
-    ai_enabled = ai_setting['value'] == 'true' if ai_setting else True
+    ai_settings_rows = conn.execute("SELECT key, value FROM user_settings WHERE user_id=? AND key IN ('ai_features_enabled', 'auto_transcript')", (user_id,)).fetchall()
+    ai_settings = {row['key']: row['value'] for row in ai_settings_rows}
+    
+    ai_enabled = ai_settings.get('ai_features_enabled', 'true') == 'true'
+    auto_transcript = ai_settings.get('auto_transcript', 'false') == 'true'
 
     conn.close()
     return render_template('player.html', course=course, structure=structure, 
@@ -1041,7 +1045,8 @@ def player(course_id):
                            last_timestamp=last_timestamp,
                            watched_paths=watched_paths, 
                            is_completed=is_completed,
-                           ai_enabled=ai_enabled)
+                           ai_enabled=ai_enabled,
+                           auto_transcript=auto_transcript)
 
 @app.route('/media/<path:filename>')
 def serve_media(filename):
@@ -2144,16 +2149,34 @@ def get_or_generate_transcript(video_path, user_id):
         if not genai: raise Exception("Google GenAI library not installed.")
         if not api_key: raise Exception("Gemini API Key missing.")
         
+        # Optimization: Extract audio first
+        if not shutil.which('ffmpeg'):
+            upload_path = full_path
+            mime_type = None
+        else:
+            audio_path = base_path + ".mp3"
+            subprocess.run(['ffmpeg', '-i', full_path, '-vn', '-ar', '16000', '-ac', '1', '-b:a', '64k', audio_path, '-y'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            upload_path = audio_path
+            mime_type = "audio/mpeg"
+
         client = genai.Client(api_key=api_key)
-        file_ref = client.files.upload(file=full_path)
+        file_ref = client.files.upload(file=upload_path, config={'mime_type': mime_type} if mime_type else None)
         
+        # Cleanup temp audio
+        if upload_path != full_path and os.path.exists(upload_path):
+            os.remove(upload_path)
+
+        start_wait = time.time()
         while True:
+            if time.time() - start_wait > 300: # 5 min
+                raise Exception("Transcription timed out during Google processing.")
+            
             file_info = client.files.get(name=file_ref.name)
             if file_info.state.name == "ACTIVE": break
-            elif file_info.state.name == "FAILED": raise Exception("Gemini failed to process video.")
-            time.sleep(2)
+            elif file_info.state.name == "FAILED": raise Exception("Gemini failed to process audio/video.")
+            time.sleep(5)
         
-        prompt = "Generate a transcript for this video in WebVTT format. Output ONLY the WebVTT text, starting with 'WEBVTT'."
+        prompt = "Generate a transcript for this audio in WebVTT format. Output ONLY the WebVTT text, starting with 'WEBVTT'."
         response = client.models.generate_content(model=model_name, contents=[file_ref, prompt])
         vtt_content = convert_to_vtt(response.text)
         
@@ -2651,22 +2674,42 @@ def generate_transcript():
                 return jsonify({"status": "error", "message": "Google GenAI library not installed."}), 500
             if not api_key:
                 return jsonify({"status": "error", "message": "Gemini API Key missing."}), 400
-                
-            client = genai.Client(api_key=api_key)
-            file_ref = client.files.upload(file=full_path)
             
+            # Optimization: Extract audio first to reduce upload size
+            if not shutil.which('ffmpeg'):
+                # Fallback to full video upload if ffmpeg is missing
+                upload_path = full_path
+                mime_type = None # Let SDK guess
+            else:
+                audio_path = base_path + ".mp3"
+                subprocess.run(['ffmpeg', '-i', full_path, '-vn', '-ar', '16000', '-ac', '1', '-b:a', '64k', audio_path, '-y'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                upload_path = audio_path
+                mime_type = "audio/mpeg"
+
+            client = genai.Client(api_key=api_key)
+            print(f"DEBUG: Uploading {upload_path}...")
+            file_ref = client.files.upload(file=upload_path, config={'mime_type': mime_type} if mime_type else None)
+            
+            # Cleanup temp audio if created
+            if upload_path != full_path and os.path.exists(upload_path):
+                os.remove(upload_path)
+
             # Wait for processing
-            print(f"DEBUG: Uploaded {full_path}, waiting for processing...")
+            print(f"DEBUG: Waiting for Google to process audio...")
+            start_wait = time.time()
             while True:
+                if time.time() - start_wait > 300: # 5 minute safety timeout
+                    return jsonify({"status": "error", "message": "Transcription timed out during Google processing. Please try again in a moment."}), 504
+                
                 file_info = client.files.get(name=file_ref.name)
                 if file_info.state.name == "ACTIVE":
                     break
                 elif file_info.state.name == "FAILED":
-                    return jsonify({"status": "error", "message": "Gemini failed to process the video file."}), 500
-                print("DEBUG: Still processing...")
-                time.sleep(2)
+                    return jsonify({"status": "error", "message": "Gemini failed to process the audio file."}), 500
+                time.sleep(5) # Increased sleep to be gentler on API
             
-            prompt = "Generate a transcript for this video in WebVTT format. Output ONLY the WebVTT text, starting with 'WEBVTT'. No conversational text."
+            print(f"DEBUG: Transcribing with {model_name}...")
+            prompt = "Generate a transcript for this audio in WebVTT format. Output ONLY the WebVTT text, starting with 'WEBVTT'. No conversational text."
             
             response = client.models.generate_content(
                 model=model_name,

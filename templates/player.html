@@ -1196,6 +1196,7 @@
         const lastPlayedPath = "{{ last_played_path }}";
         const lastTimestamp = {{ last_timestamp }};
         const isAuthenticated = {{ 'true' if current_user.is_authenticated else 'false' }};
+        const autoTranscriptEnabled = {{ 'true' if auto_transcript else 'false' }};
         
         let currentVideoPath = "";
         let currentVideoItem = null;
@@ -2197,6 +2198,13 @@
                 let html = '<p style="color: var(--text-secondary);">No transcript available for this video.</p>';
                 // Check if AI enabled (passed from backend)
                 if ({{ 'true' if ai_enabled else 'false' }}) {
+                    if (autoTranscriptEnabled) {
+                        // Automatically start generation
+                        container.innerHTML = '<div style="text-align:center; margin-top:20px;"><div class="ai-loader"><div class="spinner"></div> Auto-generating transcript...</div></div>';
+                        generateTranscript(videoPath);
+                        return;
+                    }
+
                     // Check provider type to customize text (would be cleaner to pass var, but we can infer or generic)
                     // We'll keep it generic but helpful
                     html += `<div style="text-align:center; margin-top:20px;">
