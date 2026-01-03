@@ -341,10 +341,6 @@
                     <input type="checkbox" id="aiEnabled" {% if ai_enabled %}checked{% endif %} style="margin-right: 5px;"> Enable AI
                 </label>
 
-                <label style="display: flex; align-items: center; cursor: pointer; user-select: none; margin-right: 10px;" title="Automatically trigger AI transcription when starting a video that has no transcript.">
-                    <input type="checkbox" id="autoTranscript" {% if auto_transcript %}checked{% endif %} style="margin-right: 5px;"> Auto Transcript
-                </label>
-
                 <select id="aiProvider" style="padding: 8px; border: 1px solid var(--border-color); border-radius: 4px;" onchange="toggleProviderFields()">
                     <option value="gemini" {% if ai_provider == 'gemini' %}selected{% endif %}>Gemini (Cloud)</option>
                     <option value="local" {% if ai_provider == 'local' %}selected{% endif %}>Local AI (LM Studio/Ollama)</option>
@@ -933,7 +929,6 @@
                     const localUrl = document.getElementById('localAiUrl').value.trim();
                     const localWhisperUrl = document.getElementById('localWhisperUrl').value.trim();
                     const enabled = document.getElementById('aiEnabled').checked ? 'true' : 'false';
-                    const autoTr = document.getElementById('autoTranscript').checked ? 'true' : 'false';
                     
                     if (enabled === 'true') {
                         if (provider === 'gemini' && !key) {
@@ -990,12 +985,6 @@
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ key: 'ai_features_enabled', value: enabled }),
-                    }));
-
-                    promises.push(fetch('/api/save_settings', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ key: 'auto_transcript', value: autoTr }),
                     }));
                     
                     Promise.all(promises)

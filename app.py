@@ -914,7 +914,7 @@ def settings():
     user_id = get_current_user_id()
     
     # Get API Key & Model & AI Enabled Status
-    settings_rows = conn.execute("SELECT key, value FROM user_settings WHERE user_id=? AND key IN ('gemini_api_key', 'gemini_model', 'local_model', 'ai_features_enabled', 'ai_provider', 'local_ai_url', 'local_whisper_url', 'auto_transcript')", (user_id,)).fetchall()
+    settings_rows = conn.execute("SELECT key, value FROM user_settings WHERE user_id=? AND key IN ('gemini_api_key', 'gemini_model', 'local_model', 'ai_features_enabled', 'ai_provider', 'local_ai_url', 'local_whisper_url')", (user_id,)).fetchall()
     settings_map = {row['key']: row['value'] for row in settings_rows}
     
     api_key = settings_map.get('gemini_api_key', '')
@@ -926,7 +926,6 @@ def settings():
         gemini_model = 'gemini-2.0-flash'
     
     ai_enabled = settings_map.get('ai_features_enabled', 'true') == 'true'
-    auto_transcript = settings_map.get('auto_transcript', 'false') == 'true'
     ai_provider = settings_map.get('ai_provider', 'gemini')
     local_ai_url = settings_map.get('local_ai_url', 'http://localhost:1234/v1/chat/completions')
     local_whisper_url = settings_map.get('local_whisper_url', 'http://localhost:9000/v1/audio/transcriptions')
@@ -955,7 +954,7 @@ def settings():
             'percentage': stats['percentage']
         })
     conn.close()
-    return render_template('settings.html', courses=courses_data, api_key=api_key, gemini_model=gemini_model, local_model=local_model, ai_enabled=ai_enabled, auto_transcript=auto_transcript, ai_provider=ai_provider, local_ai_url=local_ai_url, local_whisper_url=local_whisper_url, quiz_correct=quiz_correct, quiz_total=quiz_total, daily_goal=daily_goal)
+    return render_template('settings.html', courses=courses_data, api_key=api_key, gemini_model=gemini_model, local_model=local_model, ai_enabled=ai_enabled, ai_provider=ai_provider, local_ai_url=local_ai_url, local_whisper_url=local_whisper_url, quiz_correct=quiz_correct, quiz_total=quiz_total, daily_goal=daily_goal)
 
 @app.route('/course/<int:course_id>')
 def player(course_id):
@@ -1033,11 +1032,8 @@ def player(course_id):
     is_completed = (len(watched_paths) >= total_videos and total_videos > 0)
     
     # Check if AI is enabled
-    ai_settings_rows = conn.execute("SELECT key, value FROM user_settings WHERE user_id=? AND key IN ('ai_features_enabled', 'auto_transcript')", (user_id,)).fetchall()
-    ai_settings = {row['key']: row['value'] for row in ai_settings_rows}
-    
-    ai_enabled = ai_settings.get('ai_features_enabled', 'true') == 'true'
-    auto_transcript = ai_settings.get('auto_transcript', 'false') == 'true'
+    ai_setting = conn.execute("SELECT value FROM user_settings WHERE user_id=? AND key='ai_features_enabled'", (user_id,)).fetchone()
+    ai_enabled = ai_setting['value'] == 'true' if ai_setting else True
 
     conn.close()
     return render_template('player.html', course=course, structure=structure, 
@@ -1045,8 +1041,7 @@ def player(course_id):
                            last_timestamp=last_timestamp,
                            watched_paths=watched_paths, 
                            is_completed=is_completed,
-                           ai_enabled=ai_enabled,
-                           auto_transcript=auto_transcript)
+                           ai_enabled=ai_enabled)
 
 @app.route('/media/<path:filename>')
 def serve_media(filename):
