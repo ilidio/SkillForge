@@ -11,6 +11,11 @@
     <script>mermaid.initialize({ startOnLoad: false, theme: 'dark' });</script>
     <!-- D3.js -->
     <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+    <!-- Monaco Editor Loader -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.34.1/min/vs/loader.min.js"></script>
+    <!-- PDF.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
+    <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';</script>
     <style>
         /* SweetAlert2 Theme Overrides */
         .swal2-popup {
@@ -877,6 +882,8 @@
             <button class="control-btn cinema-btn" onclick="toggleCinemaMode()" title="Cinema Mode (Lights Off)"><span class="btn-icon">💡</span></button>
             <button class="control-btn" onclick="takeSnapshot()" title="Capture Frame to Notes"><span class="btn-icon">📸</span></button>
             <button class="control-btn" id="rate-btn" onclick="openMastery()" title="Rate Mastery" style="display: none;"><span class="btn-icon">⭐</span> <span class="control-text">Rate</span></button>
+            <button class="control-btn" id="tag-btn" onclick="openVideoTags()" title="Manage Tags" style="display: none;"><span class="btn-icon">🏷️</span> <span class="control-text">Tags</span></button>
+            <button class="control-btn" onclick="startFocus()" title="Focus Mode (Pomodoro)"><span class="btn-icon">🍅</span></button>
             <button class="control-btn" onclick="openInfo()" title="Course Info"><span class="btn-icon">ⓘ</span> <span class="control-text">Info</span></button>
             <button class="control-btn" onclick="toggleTheme()" title="Toggle Dark Mode"><span class="btn-icon">🌓</span></button>
             <button class="player-hamburger-btn" onclick="togglePlayerMenu()">☰</button>
@@ -892,15 +899,26 @@
                         <button id="resume-btn" class="resume-btn">Resume Learning</button>
                     </div>
                 </div>
+                
+                <!-- HTML5 Player -->
                 <video id="player" controls style="display: none;">
                     <track id="subtitles" kind="captions" label="English" srclang="en" default>
                     Your browser does not support the video tag.
                 </video>
+                
+                <!-- YouTube Player -->
+                <iframe id="yt-player" style="display: none; width: 100%; height: 100%; border: none;" allow="autoplay; encrypted-media" allowfullscreen></iframe>
 
                 <div id="restart-overlay" class="restart-overlay">
                     <span>Resumed from <b id="resume-time-display">00:00</b></span>
                     <button onclick="restartVideo()">Restart from 00:00</button>
                     <span style="cursor:pointer; opacity:0.7;" onclick="this.parentElement.style.display='none'">✕</span>
+                </div>
+                
+                <div id="focus-overlay" style="position:absolute; top:20px; left:50%; transform:translateX(-50%); background:rgba(0,0,0,0.8); color:white; padding:10px 20px; border-radius:30px; display:none; align-items:center; gap:15px; z-index:200;">
+                    <span id="focus-timer" style="font-family:monospace; font-size:1.5em; font-weight:bold;">25:00</span>
+                    <span id="focus-status" style="font-size:0.8em; text-transform:uppercase; letter-spacing:1px;">Focus</span>
+                    <button onclick="stopFocus()" style="background:none; border:1px solid white; color:white; border-radius:50%; width:24px; height:24px; cursor:pointer;">✕</button>
                 </div>
 
             <style>
@@ -952,6 +970,8 @@
                     <button class="tab-btn" id="quiz-tab-btn" onclick="openTab('quiz-tab')" style="display: none;" title="Quiz"><span class="btn-icon">📝</span> <span class="tab-text">Quiz</span></button>
                     <button class="tab-btn" onclick="openTab('flashcards')" title="Flashcards"><span class="btn-icon">🎴</span> <span class="tab-text">Flashcards</span></button>
                     <button class="tab-btn" onclick="openTab('bookmarks')" title="Bookmarks"><span class="btn-icon">🔖</span> <span class="tab-text">Bookmarks</span></button>
+                    <button class="tab-btn" onclick="openTab('code-tab')" title="Code Sandbox"><span class="btn-icon">💻</span> <span class="tab-text">Code</span></button>
+                    <button class="tab-btn" onclick="openTab('discussion')" title="Discussion"><span class="btn-icon">💬</span> <span class="tab-text">Discussion</span></button>
                     <button class="tab-btn" onclick="openTab('chat')" title="AI Chat"><span class="btn-icon">🤖</span> <span class="tab-text">AI Chat</span></button>
                 </div>
                 <button class="toggle-tabs-btn" onclick="toggleTabs()" title="Minimize/Maximize">
@@ -1003,9 +1023,19 @@
                     <p style="color: var(--text-secondary);">No chapters indexed yet.</p>
                 </div>
             </div>
-            <div id="docs-tab" class="tab-content" style="padding: 0; overflow: hidden;">
-                <iframe id="doc-viewer" style="width: 100%; height: 100%; border: none; display: none;"></iframe>
-                <div id="doc-placeholder" style="display: flex; align-items: center; justify-content: center; height: 100%; color: var(--text-secondary);">
+            <div id="docs-tab" class="tab-content" style="padding: 0; overflow: hidden; display:none; flex-direction:column;">
+                <div id="pdf-controls" style="padding:10px; background:var(--bg-sidebar); border-bottom:1px solid var(--border-color); display:flex; gap:10px; align-items:center;">
+                    <button class="btn" onclick="prevPage()">◀</button>
+                    <span id="page-num">Page 1</span> / <span id="page-count">--</span>
+                    <button class="btn" onclick="nextPage()">▶</button>
+                    <button class="btn" onclick="zoomIn()">+</button>
+                    <button class="btn" onclick="zoomOut()">-</button>
+                </div>
+                <div id="pdf-container" style="flex:1; overflow:auto; background:#525659; text-align:center; position:relative;">
+                    <canvas id="pdf-render"></canvas>
+                    <div id="text-layer" style="position:absolute; left:50%; transform:translateX(-50%); top:0;"></div>
+                </div>
+                <div id="doc-placeholder" style="display: flex; align-items: center; justify-content: center; height: 100%; color: var(--text-secondary); background:var(--bg-body);">
                     Select a PDF from Resources to view here.
                 </div>
             </div>
@@ -1029,6 +1059,31 @@
                     <p style="color: var(--text-secondary);">No bookmarks saved for this course.</p>
                 </div>
             </div>
+            <div id="code-tab" class="tab-content" style="padding:0; display:none; flex-direction:column; height:100%;">
+                <div style="display:flex; justify-content:space-between; align-items:center; padding:5px 10px; background:var(--bg-sidebar); border-bottom:1px solid var(--border-color);">
+                    <select id="code-lang" onchange="changeLanguage()" style="padding:4px; border-radius:4px;">
+                        <option value="javascript">JavaScript</option>
+                        <option value="python">Python (Pyodide - Coming Soon)</option>
+                    </select>
+                    <div>
+                        <button class="timestamp-btn" onclick="runCode()" style="color:green; border-color:green;">▶ Run</button>
+                        <button class="timestamp-btn" onclick="saveCode()">💾 Save</button>
+                    </div>
+                </div>
+                <div style="flex:1; display:flex;">
+                    <div id="monaco-container" style="flex:1; height:100%;"></div>
+                    <div id="console-output" style="width:300px; background:#1e1e1e; color:#d4d4d4; font-family:monospace; padding:10px; overflow-y:auto; border-left:1px solid #333; font-size:0.9em;">
+                        <div style="color:#666; margin-bottom:5px;">// Console Output</div>
+                    </div>
+                </div>
+            </div>
+            <div id="discussion" class="tab-content">
+                <div class="notes-toolbar">
+                    <input type="text" id="comment-input" placeholder="Add a public comment at current time..." style="flex:1; padding:8px; border-radius:4px; border:1px solid var(--border-color); margin-right:10px;">
+                    <button class="timestamp-btn" onclick="postComment()">Post</button>
+                </div>
+                <div id="comments-list" style="margin-top:15px;">Loading comments...</div>
+            </div>
             {% if ai_enabled %}
             <div id="chat" class="tab-content">
                 <div class="ai-toolbar" style="display: flex; gap: 10px; margin-bottom: 10px; flex-wrap: wrap;">
@@ -1037,6 +1092,7 @@
                     <button class="timestamp-btn" onclick="triggerAI('flashcards')"><span class="btn-icon">🧠</span> Auto-Flashcards</button>
                     <button class="timestamp-btn" onclick="triggerAI('glossary')"><span class="btn-icon">📖</span> Glossary</button>
                     <button class="timestamp-btn" onclick="triggerAI('mindmap')"><span class="btn-icon">🧬</span> Mind Map</button>
+                    <button class="timestamp-btn" onclick="startVoiceTutor()" style="border-color: #9c27b0; color: #9c27b0;"><span class="btn-icon">🎙️</span> Voice Tutor</button>
                     <button class="timestamp-btn" onclick="clearAIChat()" style="border-color: #ffcfcf; color: #d32f2f;">🗑️ Clear Chat</button>
                 </div>
                 <div id="ai-chat-output" style="flex: 1; border: 1px solid var(--border-color); border-radius: 4px; padding: 10px; background: var(--bg-sidebar); overflow-y: auto; height: 60%; margin-bottom: 10px;">
@@ -1159,6 +1215,17 @@
                 {% else %}
                     <p>No description available for this course.</p>
                 {% endif %}
+                
+                {% if rss_token %}
+                <div style="margin-top: 20px; padding: 15px; background: var(--hover-bg); border-radius: 6px; border: 1px solid var(--border-color);">
+                    <div style="font-weight: bold; margin-bottom: 5px;">🎧 Podcast Feed URL</div>
+                    <div style="display: flex; gap: 10px;">
+                        <input type="text" value="{{ request.url_root.rstrip('/') }}/feed/{{ rss_token }}/{{ course.id }}/feed.xml" readonly onclick="this.select()" style="flex: 1; padding: 8px; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-body); color: var(--text-main);">
+                        <button class="btn" onclick="navigator.clipboard.writeText(this.previousElementSibling.value); Swal.fire('Copied!', 'Feed URL copied.', 'success');">Copy</button>
+                    </div>
+                    <div style="font-size: 0.85em; color: var(--text-secondary); margin-top: 5px;">Paste this URL into your podcast app to listen on the go.</div>
+                </div>
+                {% endif %}
             </div>
         </div>
     </div>
@@ -1196,9 +1263,126 @@
         const lastPlayedPath = "{{ last_played_path }}";
         const lastTimestamp = {{ last_timestamp }};
         const isAuthenticated = {{ 'true' if current_user.is_authenticated else 'false' }};
+        const ALL_TAGS = {{ all_tags | tojson | safe }} || [];
         
         let currentVideoPath = "";
         let currentVideoItem = null;
+
+        // --- Tag Logic ---
+        function openVideoTags() {
+            if (!currentVideoPath) return;
+            
+            fetch(`/api/get_item_tags?item_type=video&item_id=${encodeURIComponent(currentVideoPath)}`)
+            .then(res => res.json())
+            .then(currentTags => {
+                const currentTagIds = new Set(currentTags.map(t => t.id));
+                
+                let html = '<div style="display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 20px;">';
+                ALL_TAGS.forEach(tag => {
+                    const checked = currentTagIds.has(tag.id) ? 'checked' : '';
+                    html += `
+                        <label style="background: ${tag.color}22; border: 1px solid ${tag.color}; padding: 5px 10px; border-radius: 15px; cursor: pointer; display: flex; align-items: center; gap: 5px;">
+                            <input type="checkbox" onchange="toggleTag(${tag.id}, 'video', '${currentVideoPath.replace(/'/g, "\\'")}', this.checked)" ${checked}>
+                            <span style="color: ${tag.color}; font-weight: bold;">${tag.name}</span>
+                        </label>
+                    `;
+                });
+                html += '</div>';
+                
+                html += `
+                    <div style="border-top: 1px solid var(--border-color); padding-top: 15px;">
+                        <input type="text" id="newTagName" placeholder="New Tag Name" class="swal2-input" style="width: 60%; display: inline-block; margin: 0;">
+                        <input type="color" id="newTagColor" value="#3b82f6" style="width: 50px; height: 40px; border: none; vertical-align: middle; cursor: pointer;">
+                        <button onclick="createNewTag()" style="background: var(--primary-color); color: white; border: none; padding: 10px 15px; border-radius: 4px; cursor: pointer;">Add</button>
+                    </div>
+                `;
+                
+                Swal.fire({
+                    title: `Tags: ${currentVideoItem ? currentVideoItem.getAttribute('data-title') : 'Video'}`,
+                    html: html,
+                    showConfirmButton: false,
+                    showCloseButton: true
+                });
+            });
+        }
+        
+        window.toggleTag = function(tagId, itemType, itemId, isAdded) {
+            const url = isAdded ? '/api/tag_item' : '/api/untag_item';
+            fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ tag_id: tagId, item_type: itemType, item_id: itemId })
+            });
+        };
+        
+        window.createNewTag = function() {
+            const name = document.getElementById('newTagName').value;
+            const color = document.getElementById('newTagColor').value;
+            
+            if (!name) return;
+            
+            fetch('/api/tags', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: name, color: color })
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    // Update ALL_TAGS and re-open
+                    ALL_TAGS.push(data.tag);
+                    Swal.close();
+                    openVideoTags(); 
+                } else {
+                    Swal.showValidationMessage(data.message);
+                }
+            });
+        };
+
+        // --- Focus Mode Logic ---
+        let focusInterval;
+        let focusTime = 25 * 60;
+        let isBreak = false;
+        
+        function startFocus() {
+            document.getElementById('focus-overlay').style.display = 'flex';
+            clearInterval(focusInterval);
+            focusInterval = setInterval(updateFocusTimer, 1000);
+        }
+        
+        function stopFocus() {
+            clearInterval(focusInterval);
+            document.getElementById('focus-overlay').style.display = 'none';
+            focusTime = 25 * 60;
+            isBreak = false;
+            updateFocusDisplay();
+        }
+        
+        function updateFocusTimer() {
+            if (focusTime > 0) {
+                focusTime--;
+                updateFocusDisplay();
+            } else {
+                // Switch mode
+                isBreak = !isBreak;
+                focusTime = isBreak ? 5 * 60 : 25 * 60;
+                
+                if (isBreak) {
+                    player.pause();
+                    Swal.fire('Break Time!', 'Take 5 minutes.', 'success');
+                    document.getElementById('focus-status').innerText = "BREAK";
+                } else {
+                    Swal.fire('Focus Time!', 'Back to work.', 'info');
+                    document.getElementById('focus-status').innerText = "FOCUS";
+                }
+            }
+        }
+        
+        function updateFocusDisplay() {
+            const m = Math.floor(focusTime / 60);
+            const s = focusTime % 60;
+            document.getElementById('focus-timer').innerText = `${m}:${s.toString().padStart(2, '0')}`;
+        }
 
         // --- Theme Logic ---
         function toggleTheme() {
@@ -1242,6 +1426,62 @@
             sidebar.classList.toggle('minimized');
         }
 
+        // --- Comment Logic ---
+        function loadComments() {
+            if (!currentVideoPath) return;
+            const container = document.getElementById('comments-list');
+            container.innerHTML = 'Loading...';
+            
+            fetch(`/api/comments?video_path=${encodeURIComponent(currentVideoPath)}`)
+            .then(res => res.json())
+            .then(data => {
+                container.innerHTML = '';
+                if (data.length === 0) {
+                    container.innerHTML = '<p style="color:var(--text-secondary); text-align:center;">No comments yet. Be the first!</p>';
+                    return;
+                }
+                data.forEach(c => {
+                    const div = document.createElement('div');
+                    div.style.borderBottom = '1px solid var(--border-color)';
+                    div.style.padding = '10px 0';
+                    const timeStr = formatTime(c.timestamp);
+                    div.innerHTML = `
+                        <div style="display:flex; gap:10px;">
+                            <div class="user-avatar" style="width:24px; height:24px; font-size:0.8em;">
+                                ${c.profile_pic ? `<img src="${c.profile_pic}">` : c.user_name[0]}
+                            </div>
+                            <div style="flex:1;">
+                                <div style="font-size:0.85em; color:var(--text-secondary);">
+                                    <b>${c.user_name}</b> at <a href="#" onclick="player.currentTime=${c.timestamp}; player.play(); return false;">${timeStr}</a>
+                                </div>
+                                <div style="margin-top:4px;">${c.text}</div>
+                            </div>
+                        </div>
+                    `;
+                    container.appendChild(div);
+                });
+            });
+        }
+        
+        function postComment() {
+            const input = document.getElementById('comment-input');
+            const text = input.value.trim();
+            if (!text || !currentVideoPath) return;
+            
+            fetch('/api/comments', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    video_path: currentVideoPath,
+                    text: text,
+                    timestamp: player.currentTime
+                })
+            }).then(() => {
+                input.value = '';
+                loadComments();
+            });
+        }
+
         function restoreSession() {
             if (lastPlayedPath && lastPlayedPath !== "None") {
                 const videoItems = document.querySelectorAll('.video-item');
@@ -1267,7 +1507,128 @@
             document.getElementById('restart-overlay').style.display = 'none';
         }
 
+        // --- PDF Reader Logic ---
+        let pdfDoc = null,
+            pageNum = 1,
+            pageRendering = false,
+            pageNumPending = null,
+            scale = 1.2,
+            canvas = document.getElementById('pdf-render'),
+            ctx = canvas.getContext('2d');
+
+        function loadPDF(url) {
+            document.getElementById('doc-placeholder').style.display = 'none';
+            document.getElementById('pdf-controls').style.display = 'flex';
+            document.getElementById('pdf-container').style.display = 'block';
+            
+            pdfjsLib.getDocument(url).promise.then(function(pdfDoc_) {
+                pdfDoc = pdfDoc_;
+                document.getElementById('page-count').textContent = pdfDoc.numPages;
+                renderPage(pageNum);
+            });
+        }
+
+        function renderPage(num) {
+            pageRendering = true;
+            // Fetch page
+            pdfDoc.getPage(num).then(function(page) {
+                var viewport = page.getViewport({scale: scale});
+                canvas.height = viewport.height;
+                canvas.width = viewport.width;
+
+                var renderContext = {
+                    canvasContext: ctx,
+                    viewport: viewport
+                };
+                var renderTask = page.render(renderContext);
+
+                // Wait for render to finish
+                renderTask.promise.then(function() {
+                    pageRendering = false;
+                    if (pageNumPending !== null) {
+                        renderPage(pageNumPending);
+                        pageNumPending = null;
+                    }
+                });
+            });
+
+            document.getElementById('page-num').textContent = "Page " + num;
+        }
+
+        function queueRenderPage(num) {
+            if (pageRendering) {
+                pageNumPending = num;
+            } else {
+                renderPage(num);
+            }
+        }
+
+        function prevPage() {
+            if (pageNum <= 1) return;
+            pageNum--;
+            queueRenderPage(pageNum);
+        }
+
+        function nextPage() {
+            if (pageNum >= pdfDoc.numPages) return;
+            pageNum++;
+            queueRenderPage(pageNum);
+        }
+        
+        function zoomIn() { scale += 0.2; renderPage(pageNum); }
+        function zoomOut() { scale -= 0.2; renderPage(pageNum); }
+
+        function openPDF(url) {
+            openTab('docs-tab');
+            loadPDF(url);
+            return false;
+        }
+
+        function renderResources(resources) {
+            resourceListUi.innerHTML = '';
+            if (resources.length === 0) {
+                resourceListUi.innerHTML = '<li class="resource-item" style="color: var(--text-secondary);">No resources for this module.</li>';
+                return;
+            }
+            resources.forEach(r => {
+                const li = document.createElement('li');
+                li.className = 'resource-item';
+                
+                let action = '';
+                if (r.name.toLowerCase().endsWith('.pdf')) {
+                    // Fix: Use event.preventDefault()
+                    action = `href="#" onclick="event.preventDefault(); openPDF('/course_file/${courseId}/${r.path}')"`;
+                } else {
+                    action = `href="/course_file/${courseId}/${r.path}" target="_blank"`;
+                }
+                
+                li.innerHTML = `<span style="font-size:1.2em;">📄</span> <a ${action}>${r.name}</a>`;
+                resourceListUi.appendChild(li);
+            });
+        }
+
+        // --- Code Sandbox Logic ---
+        let editor;
+        
+        require.config({ paths: { 'vs': 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.34.1/min/vs' }});
+        
+        function initMonaco() {
+            if (editor) return;
+            require(['vs/editor/editor.main'], function() {
+                editor = monaco.editor.create(document.getElementById('monaco-container'), {
+                    value: '// Select a video to load saved code',
+                    language: 'javascript',
+                    theme: 'vs-dark',
+                    automaticLayout: true
+                });
+            });
+        }
+
         function openTab(tabName) {
+            // ... existing logic ...
+            if (tabName === 'discussion') loadComments();
+            // ...
+            
             // Ensure expanded when switching tabs
             const container = document.getElementById('tabsContainer');
             if (container.classList.contains('minimized')) {
@@ -1290,6 +1651,78 @@
 
             if (tabName === 'knowledge-map-tab') renderKnowledgeMap();
             if (tabName === 'bookmarks') loadBookmarks();
+            
+            // Code Tab Specific
+            if (tabName === 'code-tab') {
+                const el = document.getElementById('code-tab');
+                el.style.display = 'flex'; // Override default block
+                setTimeout(initMonaco, 100);
+            } else {
+                document.getElementById('code-tab').style.display = 'none';
+            }
+        }
+
+        function loadCode(videoPath) {
+            if (!editor) return;
+            fetch(`/api/get_code?video_path=${encodeURIComponent(videoPath)}`)
+            .then(res => res.json())
+            .then(data => {
+                const code = data.code || '// Write your code here...';
+                editor.setValue(code);
+                const lang = data.language || 'javascript';
+                document.getElementById('code-lang').value = lang;
+                monaco.editor.setModelLanguage(editor.getModel(), lang);
+            });
+        }
+        
+        function saveCode() {
+            if (!currentVideoPath || !editor) return;
+            const code = editor.getValue();
+            const lang = document.getElementById('code-lang').value;
+            
+            fetch('/api/save_code', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ video_path: currentVideoPath, code: code, language: lang })
+            }).then(() => {
+                const btn = event.target;
+                const originalText = btn.innerText;
+                btn.innerText = 'Saved!';
+                setTimeout(() => btn.innerText = originalText, 1000);
+            });
+        }
+        
+        function runCode() {
+            const code = editor.getValue();
+            const lang = document.getElementById('code-lang').value;
+            const outputDiv = document.getElementById('console-output');
+            
+            outputDiv.innerHTML = '<div style="color:#666;">// Running...</div>';
+            
+            if (lang === 'javascript') {
+                try {
+                    // Capture console.log
+                    const logs = [];
+                    const originalLog = console.log;
+                    console.log = (...args) => logs.push(args.join(' '));
+                    
+                    // Run
+                    new Function(code)();
+                    
+                    // Restore
+                    console.log = originalLog;
+                    
+                    if (logs.length > 0) {
+                        logs.forEach(l => outputDiv.innerHTML += `<div>${l}</div>`);
+                    } else {
+                        outputDiv.innerHTML += `<div style="color:#888;">(No output)</div>`;
+                    }
+                } catch (e) {
+                    outputDiv.innerHTML += `<div style="color:red;">Error: ${e.message}</div>`;
+                }
+            } else {
+                outputDiv.innerHTML += `<div style="color:orange;">Python execution via browser (Pyodide) is coming soon. Save snippets for now!</div>`;
+            }
         }
 
         // --- Knowledge Map Logic ---
@@ -1548,6 +1981,52 @@
             });
         }
 
+        // --- Voice Tutor Logic ---
+        function startVoiceTutor() {
+            if (!('webkitSpeechRecognition' in window)) {
+                Swal.fire('Not Supported', 'Browser does not support speech recognition.', 'error');
+                return;
+            }
+            
+            const recognition = new webkitSpeechRecognition();
+            recognition.continuous = false;
+            recognition.lang = 'en-US';
+            
+            Swal.fire({
+                title: 'Listening...',
+                text: 'Ask your question now.',
+                icon: 'info',
+                showConfirmButton: false,
+                didOpen: () => recognition.start()
+            });
+            
+            recognition.onresult = function(event) {
+                const text = event.results[0][0].transcript;
+                Swal.close();
+                document.getElementById('ai-user-input').value = text;
+                sendAIChat(true); // true = auto-speak response
+            };
+            
+            recognition.onerror = function(event) {
+                Swal.close();
+                console.error(event.error);
+            };
+        }
+        
+        function speakText(text) {
+            fetch('/api/tts', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({text: text})
+            })
+            .then(res => res.blob())
+            .then(blob => {
+                const url = URL.createObjectURL(blob);
+                const audio = new Audio(url);
+                audio.play();
+            });
+        }
+
         // --- AI Assistant Logic ---
         function loadAIHistory(videoPath) {
             const container = document.getElementById('ai-chat-output');
@@ -1655,7 +2134,7 @@
             container.scrollTop = container.scrollHeight;
         }
 
-        function sendAIChat() {
+        function sendAIChat(speak=false) {
             const input = document.getElementById('ai-user-input');
             const text = input.value.trim();
             if (!text) return;
@@ -1692,6 +2171,7 @@
                 document.getElementById('ai-loading').remove();
                 if (data.status === 'success') {
                     appendAIMessage('ai', data.response);
+                    if (speak) speakText(data.response);
                 } else {
                     appendAIMessage('ai', "Error: " + data.message);
                 }
@@ -2065,67 +2545,75 @@
             currentVideoPath = src.replace('/media/', '');
             currentVideoItem = activeElement;
             
+            // Hide all players initially
+            player.style.display = 'none';
+            player.pause();
+            document.getElementById('yt-player').style.display = 'none';
+            document.getElementById('yt-player').src = "";
+            document.getElementById('quiz-container').style.display = 'none';
+            
             if (type === 'quiz') {
-                player.style.display = 'none';
-                player.pause();
                 document.getElementById('rate-btn').style.display = 'none';
+                document.getElementById('tag-btn').style.display = 'none';
                 document.getElementById('quiz-tab-btn').style.display = 'block';
                 openTab('quiz-tab');
                 loadQuiz(currentVideoPath); 
             } else {
-                document.getElementById('quiz-container').style.display = 'none';
-                player.style.display = 'block';
-                
                 // Show Mastery Button
                 document.getElementById('rate-btn').style.display = 'inline-block';
+                document.getElementById('tag-btn').style.display = 'inline-block';
                 const currentScore = parseInt(activeElement.getAttribute('data-mastery') || '0');
                 highlightStars(currentScore);
                 updateMasteryLabel(currentScore);
 
-                player.src = src;
-                
-                const savedSpeed = localStorage.getItem('playbackRate');
-                if (savedSpeed) {
-                    setSpeed(parseFloat(savedSpeed));
-                }
-                
-                const subTrack = document.getElementById('subtitles');
-                subTrack.src = "/subtitle/" + src.replace('/media/', '');
-                
-                player.play();
+                // Check source type
+                if (src.includes('yt:')) {
+                    const videoId = src.split('yt:')[1];
+                    document.getElementById('yt-player').style.display = 'block';
+                    document.getElementById('yt-player').src = `https://www.youtube.com/embed/${videoId}?autoplay=1&enablejsapi=1`;
+                    // YouTube tracking would need YouTube Player API integration for precise time/progress
+                } else {
+                    player.style.display = 'block';
+                    player.src = src;
+                    
+                    const savedSpeed = localStorage.getItem('playbackRate');
+                    if (savedSpeed) setSpeed(parseFloat(savedSpeed));
+                    
+                    const subTrack = document.getElementById('subtitles');
+                    subTrack.src = "/subtitle/" + src.replace('/media/', '');
+                    
+                    player.play();
+                    
+                    // Resume Logic (HTML5 Only for now)
+                    let resumePos = initialTime;
+                    if (resumePos === null) {
+                        const isCompleted = activeElement.classList.contains('watched');
+                        if (!isCompleted) {
+                            const savedTime = parseFloat(activeElement.getAttribute('data-watched-time') || '0');
+                            if (savedTime > 10) resumePos = savedTime;
+                        }
+                    }
 
-                // Resume Logic
-                let resumePos = initialTime;
-                if (resumePos === null) {
-                    const isCompleted = activeElement.classList.contains('watched');
-                    if (!isCompleted) {
-                        const savedTime = parseFloat(activeElement.getAttribute('data-watched-time') || '0');
-                        if (savedTime > 10) resumePos = savedTime; // Only resume if > 10s
+                    if (resumePos) {
+                        player.addEventListener('loadedmetadata', function onLoaded() {
+                            player.currentTime = resumePos;
+                            player.removeEventListener('loadedmetadata', onLoaded);
+                            document.getElementById('resume-time-display').innerText = `${Math.floor(resumePos / 60)}:${Math.floor(resumePos % 60).toString().padStart(2, '0')}`;
+                            document.getElementById('restart-overlay').style.display = 'flex';
+                            setTimeout(() => document.getElementById('restart-overlay').style.display = 'none', 10000);
+                        });
                     }
                 }
-
-                if (resumePos) {
-                    player.addEventListener('loadedmetadata', function onLoaded() {
-                        player.currentTime = resumePos;
-                        player.removeEventListener('loadedmetadata', onLoaded);
-                        
-                        // Show restart overlay
-                        const m = Math.floor(resumePos / 60);
-                        const s = Math.floor(resumePos % 60);
-                        document.getElementById('resume-time-display').innerText = `${m}:${s.toString().padStart(2, '0')}`;
-                        document.getElementById('restart-overlay').style.display = 'flex';
-                        
-                        // Auto-hide after 10s
-                        setTimeout(() => {
-                            document.getElementById('restart-overlay').style.display = 'none';
-                        }, 10000);
-                    });
-                }
                 
-                saveProgress(currentVideoPath, title, 0);
-                loadTranscript(currentVideoPath);
-                loadChapters(currentVideoPath);
+                saveProgress(currentVideoPath, title, 0); // Initial ping
+                // Note: Transcript/Chapters loading needs adaptation for YT (fetch from API/DB instead of file)
+                // For now, these might fail gracefully for YT videos without local files
+                if (!src.includes('yt:')) {
+                    loadTranscript(currentVideoPath);
+                    loadChapters(currentVideoPath);
+                }
                 loadAIHistory(currentVideoPath);
+                if (editor) loadCode(currentVideoPath);
             }
             
             const moduleList = activeElement.closest('.video-list');
@@ -2150,6 +2638,11 @@
             const label = document.getElementById('mastery-label');
             const texts = ["Rate understanding", "Confused", "Need Review", "Getting there", "Good", "Mastered!"];
             label.innerText = texts[score] || texts[0];
+        }
+
+        function changeLanguage() {
+            const lang = document.getElementById('code-lang').value;
+            if (editor) monaco.editor.setModelLanguage(editor.getModel(), lang);
         }
 
         function rateMastery(score) {

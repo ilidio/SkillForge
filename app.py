@@ -1,7 +1,7 @@
 import os
 import sqlite3
 import re
-from flask import Flask, render_template, jsonify, send_from_directory, request, abort, redirect, url_for, flash, send_file
+from flask import Flask, render_template, jsonify, send_from_directory, request, abort, redirect, url_for, flash, send_file, Response
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 import uuid
@@ -13,6 +13,7 @@ import requests
 import subprocess
 import shutil
 import time
+import math
 from reportlab.lib.pagesizes import landscape, A4
 from reportlab.pdfgen import canvas
 from reportlab.lib import colors
@@ -20,6 +21,10 @@ from reportlab.platypus import Paragraph, Frame
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER
 from tinytag import TinyTag
+import yt_dlp
+from gtts import gTTS
+import genanki
+import tempfile
 
 # AI Import
 try:
@@ -42,12 +47,13 @@ login_manager.login_view = 'login'
 
 # --- User Model ---
 class User(UserMixin):
-    def __init__(self, id, username, name, address, profile_pic=None, is_admin=False):
+    def __init__(self, id, username, name, address, profile_pic=None, rss_token=None, is_admin=False):
         self.id = id
         self.username = username
         self.name = name
         self.address = address
         self.profile_pic = profile_pic
+        self.rss_token = rss_token
         self.is_admin = is_admin
 
 @login_manager.user_loader
@@ -58,7 +64,9 @@ def load_user(user_id):
     if user_row:
         # Check for profile_pic column in Row
         pic = user_row['profile_pic'] if 'profile_pic' in user_row.keys() else None
-        return User(user_row['id'], user_row['username'], user_row['name'], user_row['address'], profile_pic=pic)
+        rss = user_row['rss_token'] if 'rss_token' in user_row.keys() else None
+        is_admin = user_row['is_admin'] if 'is_admin' in user_row.keys() else (user_row['id'] == 1) # Fallback for first user
+        return User(user_row['id'], user_row['username'], user_row['name'], user_row['address'], profile_pic=pic, rss_token=rss, is_admin=is_admin)
     return None
 
 @app.template_filter('format_time')
@@ -343,6 +351,8 @@ def init_db():
             password_hash TEXT NOT NULL,
             name TEXT,
             address TEXT,
+            profile_pic TEXT,
+            rss_token TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         
@@ -525,6 +535,49 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
         );
+
+        CREATE TABLE IF NOT EXISTS tags (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            color TEXT DEFAULT '#3b82f6'
+        );
+
+        CREATE TABLE IF NOT EXISTS item_tags (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tag_id INTEGER,
+            item_type TEXT, -- 'course' or 'video'
+            item_id TEXT, -- course_id (int) or video_path (str)
+            FOREIGN KEY (tag_id) REFERENCES tags (id) ON DELETE CASCADE,
+            UNIQUE(tag_id, item_type, item_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS video_embeddings (
+            video_path TEXT PRIMARY KEY,
+            embedding TEXT, -- JSON string of float list
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS video_code (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            video_path TEXT,
+            language TEXT,
+            code TEXT,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+            UNIQUE(user_id, video_path)
+        );
+
+        CREATE TABLE IF NOT EXISTS comments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            video_path TEXT,
+            timestamp REAL,
+            text TEXT,
+            parent_id INTEGER DEFAULT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+        );
     ''')
 
     # Migrations
@@ -539,6 +592,33 @@ def init_db():
     except sqlite3.OperationalError:
         print("Migrating: Adding profile_pic to users...")
         conn.execute("ALTER TABLE users ADD COLUMN profile_pic TEXT")
+
+    try:
+        conn.execute('SELECT rss_token FROM users LIMIT 1')
+    except sqlite3.OperationalError:
+        print("Migrating: Adding rss_token to users...")
+        conn.execute("ALTER TABLE users ADD COLUMN rss_token TEXT")
+
+    try:
+        conn.execute('SELECT is_admin FROM users LIMIT 1')
+    except sqlite3.OperationalError:
+        print("Migrating: Adding is_admin to users...")
+        conn.execute("ALTER TABLE users ADD COLUMN is_admin BOOLEAN DEFAULT 0")
+        # Make first user admin
+        conn.execute("UPDATE users SET is_admin = 1 WHERE id = 1")
+
+    try:
+        conn.execute('SELECT source_type FROM courses LIMIT 1')
+    except sqlite3.OperationalError:
+        print("Migrating: Adding source_type to courses...")
+        conn.execute("ALTER TABLE courses ADD COLUMN source_type TEXT DEFAULT 'local'")
+        conn.execute("ALTER TABLE courses ADD COLUMN source_url TEXT")
+        
+    try:
+        conn.execute('SELECT source_id FROM videos LIMIT 1')
+    except sqlite3.OperationalError:
+        print("Migrating: Adding source_id to videos...")
+        conn.execute("ALTER TABLE videos ADD COLUMN source_id TEXT")
 
     conn.commit()
     conn.close()
@@ -749,11 +829,29 @@ def index():
 
     courses_rows = conn.execute(query, params).fetchall()
     
+    # Get all tags for courses
+    course_tags_map = {}
+    try:
+        tag_rows = conn.execute('''
+            SELECT it.item_id, t.name, t.color, t.id as tag_id
+            FROM item_tags it
+            JOIN tags t ON it.tag_id = t.id
+            WHERE it.item_type = 'course'
+        ''').fetchall()
+        for row in tag_rows:
+            cid = int(row['item_id'])
+            if cid not in course_tags_map:
+                course_tags_map[cid] = []
+            course_tags_map[cid].append({'name': row['name'], 'color': row['color'], 'id': row['tag_id']})
+    except:
+        pass # Table might not exist yet if migration hasn't run on fresh start
+
     courses_data = []
     for row in courses_rows:
         course = dict(row)
         stats = get_course_stats(conn, course['id'], user_id)
         course.update(stats)
+        course['tags'] = course_tags_map.get(course['id'], [])
         
         course_folder = os.path.join(COURSES_DIR, course['folder_name'])
         thumb_url = None
@@ -768,18 +866,25 @@ def index():
         course['thumbnail'] = thumb_url
         courses_data.append(course)
         
+    all_tags = []
+    try:
+        all_tags = [dict(r) for r in conn.execute('SELECT * FROM tags ORDER BY name').fetchall()]
+    except: pass
+
     conn.close()
-    return render_template('index.html', courses=courses_data, continue_watching=continue_watching, daily_review=daily_review)
+    return render_template('index.html', courses=courses_data, continue_watching=continue_watching, daily_review=daily_review, all_tags=all_tags)
 
 @app.route('/search')
 def search_page():
     q = request.args.get('q', '').strip()
+    semantic = request.args.get('semantic') == 'true'
     results = {'videos': [], 'notes': [], 'transcripts': []}
     
     if q:
         conn = get_db_connection()
         user_id = get_current_user_id()
         
+        # Standard keyword search
         v_rows = conn.execute('''
             SELECT v.title, v.path, c.title as course_title, c.id as course_id 
             FROM videos v
@@ -790,6 +895,49 @@ def search_page():
         ''', (f'%{q}%',)).fetchall()
         results['videos'] = [dict(r) for r in v_rows]
         
+        # Semantic Search Logic
+        if semantic and user_id:
+            key_row = conn.execute("SELECT value FROM user_settings WHERE user_id=? AND key='gemini_api_key'", (user_id,)).fetchone()
+            api_key = key_row['value'] if key_row else None
+            
+            if api_key:
+                q_emb = get_embedding(q, api_key)
+                if q_emb:
+                    emb_rows = conn.execute('SELECT video_path, embedding FROM video_embeddings').fetchall()
+                    scores = []
+                    for row in emb_rows:
+                        try:
+                            v_emb = json.loads(row['embedding'])
+                            score = cosine_similarity(q_emb, v_emb)
+                            scores.append((score, row['video_path']))
+                        except: pass
+                    
+                    scores.sort(key=lambda x: x[0], reverse=True)
+                    top_paths = [x[1] for x in scores[:10]] # Top 10
+                    
+                    if top_paths:
+                        placeholders = ','.join(['?'] * len(top_paths))
+                        semantic_rows = conn.execute(f'''
+                            SELECT v.title, v.path, c.title as course_title, c.id as course_id 
+                            FROM videos v
+                            JOIN modules m ON v.module_id = m.id
+                            JOIN courses c ON m.course_id = c.id
+                            WHERE v.path IN ({placeholders})
+                        ''', top_paths).fetchall()
+                        
+                        # Sort by score order
+                        s_map = {r['path']: dict(r) for r in semantic_rows}
+                        ordered_results = []
+                        for path in top_paths:
+                            if path in s_map:
+                                item = s_map[path]
+                                item['is_semantic'] = True
+                                ordered_results.append(item)
+                                
+                        # Merge/Replace
+                        # Ideally we show semantic results at top
+                        results['videos'] = ordered_results + [r for r in results['videos'] if r['path'] not in top_paths]
+
         if user_id:
             n_rows = conn.execute('''
                 SELECT vn.content, vn.video_path, v.title as video_title, c.title as course_title, c.id as course_id
@@ -938,6 +1086,10 @@ def settings():
     # XP/Goal Settings
     xp_row = conn.execute('SELECT daily_goal_mins FROM user_xp WHERE user_id=?', (user_id,)).fetchone()
     daily_goal = xp_row['daily_goal_mins'] if xp_row else 30
+    
+    # RSS Token
+    user_row = conn.execute('SELECT rss_token FROM users WHERE id=?', (user_id,)).fetchone()
+    rss_token = user_row['rss_token'] if user_row else None
 
     courses_query = conn.execute('SELECT id, title, description, alternate_title FROM courses ORDER BY title').fetchall()
     
@@ -954,7 +1106,7 @@ def settings():
             'percentage': stats['percentage']
         })
     conn.close()
-    return render_template('settings.html', courses=courses_data, api_key=api_key, gemini_model=gemini_model, local_model=local_model, ai_enabled=ai_enabled, ai_provider=ai_provider, local_ai_url=local_ai_url, local_whisper_url=local_whisper_url, quiz_correct=quiz_correct, quiz_total=quiz_total, daily_goal=daily_goal)
+    return render_template('settings.html', courses=courses_data, api_key=api_key, gemini_model=gemini_model, local_model=local_model, ai_enabled=ai_enabled, ai_provider=ai_provider, local_ai_url=local_ai_url, local_whisper_url=local_whisper_url, quiz_correct=quiz_correct, quiz_total=quiz_total, daily_goal=daily_goal, rss_token=rss_token)
 
 @app.route('/course/<int:course_id>')
 def player(course_id):
@@ -1035,13 +1187,25 @@ def player(course_id):
     ai_setting = conn.execute("SELECT value FROM user_settings WHERE user_id=? AND key='ai_features_enabled'", (user_id,)).fetchone()
     ai_enabled = ai_setting['value'] == 'true' if ai_setting else True
 
+    all_tags = []
+    try:
+        all_tags = [dict(r) for r in conn.execute('SELECT * FROM tags ORDER BY name').fetchall()]
+    except: pass
+    
+    rss_token = None
+    if user_id:
+        user_row = conn.execute('SELECT rss_token FROM users WHERE id=?', (user_id,)).fetchone()
+        rss_token = user_row['rss_token'] if user_row else None
+
     conn.close()
     return render_template('player.html', course=course, structure=structure, 
                            last_played_path=last_played_path, 
                            last_timestamp=last_timestamp,
                            watched_paths=watched_paths, 
                            is_completed=is_completed,
-                           ai_enabled=ai_enabled)
+                           ai_enabled=ai_enabled,
+                           all_tags=all_tags,
+                           rss_token=rss_token)
 
 @app.route('/media/<path:filename>')
 def serve_media(filename):
@@ -1105,6 +1269,95 @@ def register():
 def logout():
     logout_user()
     return redirect(url_for('index'))
+
+# --- Admin Routes ---
+
+@app.route('/admin')
+@login_required
+def admin_dashboard():
+    if not current_user.is_admin:
+        abort(403)
+        
+    conn = get_db_connection()
+    users = conn.execute('SELECT * FROM users').fetchall()
+    
+    users_data = []
+    for u in users:
+        stats = conn.execute('SELECT SUM(seconds_watched) as t, SUM(videos_completed) as c FROM daily_activity WHERE user_id=?', (u['id'],)).fetchone()
+        users_data.append({
+            'id': u['id'],
+            'username': u['username'],
+            'name': u['name'],
+            'joined': u['created_at'],
+            'total_time': stats['t'] or 0,
+            'completed': stats['c'] or 0
+        })
+    conn.close()
+    return render_template('admin.html', users=users_data)
+
+@app.route('/api/admin/reset_password', methods=['POST'])
+@login_required
+def admin_reset_password():
+    if not current_user.is_admin: return jsonify({"status":"error"}), 403
+    
+    user_id = request.json.get('user_id')
+    new_pass = request.json.get('password')
+    
+    conn = get_db_connection()
+    hashed = generate_password_hash(new_pass)
+    conn.execute('UPDATE users SET password_hash = ? WHERE id = ?', (hashed, user_id))
+    conn.commit()
+    conn.close()
+    return jsonify({"status":"success"})
+
+@app.route('/api/admin/delete_user', methods=['POST'])
+@login_required
+def admin_delete_user():
+    if not current_user.is_admin: return jsonify({"status":"error"}), 403
+    
+    user_id = request.json.get('user_id')
+    if user_id == current_user.id:
+        return jsonify({"status":"error", "message":"Cannot delete yourself"}), 400
+        
+    conn = get_db_connection()
+    conn.execute('DELETE FROM users WHERE id = ?', (user_id,))
+    # Cascade delete handles the rest
+    conn.commit()
+    conn.close()
+    return jsonify({"status":"success"})
+
+# --- Code Sandbox API ---
+
+@app.route('/api/get_code', methods=['GET'])
+@login_required
+def get_code():
+    video_path = request.args.get('video_path')
+    user_id = current_user.id
+    conn = get_db_connection()
+    row = conn.execute('SELECT code, language FROM video_code WHERE user_id=? AND video_path=?', (user_id, video_path)).fetchone()
+    conn.close()
+    return jsonify({
+        "code": row['code'] if row else "", 
+        "language": row['language'] if row else "javascript"
+    })
+
+@app.route('/api/save_code', methods=['POST'])
+@login_required
+def save_code():
+    data = request.json
+    user_id = current_user.id
+    conn = get_db_connection()
+    conn.execute('''
+        INSERT INTO video_code (user_id, video_path, code, language, updated_at)
+        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(user_id, video_path) DO UPDATE SET
+            code = excluded.code,
+            language = excluded.language,
+            updated_at = CURRENT_TIMESTAMP
+    ''', (user_id, data['video_path'], data['code'], data['language']))
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "success"})
 
 # --- API Routes ---
 
@@ -1801,6 +2054,40 @@ def study_page():
     
     return render_template('study.html', cards=cards_list, due_count=due_count)
 
+@app.route('/calendar')
+@login_required
+def calendar_page():
+    return render_template('calendar.html')
+
+@app.route('/api/calendar_events')
+@login_required
+def get_calendar_events():
+    user_id = current_user.id
+    start = request.args.get('start') # YYYY-MM-DD
+    end = request.args.get('end')     # YYYY-MM-DD
+    
+    conn = get_db_connection()
+    
+    # Get Flashcard counts
+    # Group by next_review_date
+    rows = conn.execute('''
+        SELECT next_review_date, COUNT(*) as c 
+        FROM flashcards 
+        WHERE user_id = ? AND next_review_date BETWEEN ? AND ?
+        GROUP BY next_review_date
+    ''', (user_id, start, end)).fetchall()
+    
+    events = []
+    for r in rows:
+        events.append({
+            'title': f"{r['c']} Cards",
+            'start': r['next_review_date'],
+            'color': '#5022c3' # Primary color
+        })
+        
+    conn.close()
+    return jsonify(events)
+
 @app.route('/quiz/<path:quiz_file>')
 @login_required
 def serve_quiz(quiz_file):
@@ -1831,6 +2118,13 @@ def get_course_videos_api(course_id):
     for r in vp_rows:
         vp_map[r['video_path']] = {'watched_time': r['watched_time'], 'is_completed': r['is_completed']}
         
+    # Check AI Assets
+    ai_map = {}
+    ai_rows = conn.execute('SELECT video_path, content_type FROM ai_generated_content WHERE user_id = ? AND content_type IN ("summarize", "quiz")', (user_id,)).fetchall()
+    for r in ai_rows:
+        if r['video_path'] not in ai_map: ai_map[r['video_path']] = set()
+        ai_map[r['video_path']].add(r['content_type'])
+    
     structure = []
     for module in modules:
         videos = conn.execute('SELECT * FROM videos WHERE module_id = ? ORDER BY order_index', (module['id'],)).fetchall()
@@ -1841,6 +2135,23 @@ def get_course_videos_api(course_id):
             prog = vp_map.get(v['path'], {'watched_time': 0, 'is_completed': False})
             v_dict['watched_time'] = prog['watched_time']
             v_dict['is_completed'] = prog['is_completed']
+            # Include source info
+            if 'source_id' in v.keys():
+                v_dict['source_id'] = v['source_id']
+                
+            # Check assets
+            # 1. Transcript
+            full_path = os.path.join(COURSES_DIR, v['path'])
+            base_path = os.path.splitext(full_path)[0]
+            v_dict['has_transcript'] = os.path.exists(base_path + ".vtt") or os.path.exists(base_path + ".srt")
+            
+            # 2. Quiz & Summary
+            v_dict['has_summary'] = 'summarize' in ai_map.get(v['path'], set())
+            v_dict['has_quiz'] = 'quiz' in ai_map.get(v['path'], set())
+            
+            # Legacy quiz check (file)
+            if v['item_type'] == 'quiz': v_dict['has_quiz'] = True
+            
             mod_dict['videos'].append(v_dict)
         structure.append(mod_dict)
         
@@ -2000,12 +2311,149 @@ def call_ai_service(provider, api_key, model_name, local_url, system_instruction
                          (user_id, provider, model_name, action))
             conn.commit()
             conn.close()
-        except Exception as e:
-            print(f"Error logging AI usage: {e}")
+        except:
+            pass
             
     return response_text
 
-@app.route('/api/ai_chat', methods=['POST'])
+def get_embedding(text, api_key):
+    if not api_key or not genai: return None
+    try:
+        client = genai.Client(api_key=api_key)
+        # Using text-embedding-004 as standard
+        result = client.models.embed_content(
+            model="text-embedding-004",
+            contents=text
+        )
+        return result.embeddings[0].values
+    except Exception as e:
+        print(f"Embedding error: {e}")
+        return None
+
+def cosine_similarity(v1, v2):
+    if not v1 or not v2: return 0
+    dot_product = sum(a*b for a,b in zip(v1, v2))
+    magnitude1 = math.sqrt(sum(a*a for a in v1))
+    magnitude2 = math.sqrt(sum(b*b for b in v2))
+    if magnitude1 == 0 or magnitude2 == 0: return 0
+    return dot_product / (magnitude1 * magnitude2)
+
+@app.route('/api/generate_embeddings', methods=['POST'])
+@login_required
+def generate_embeddings():
+    user_id = current_user.id
+    conn = get_db_connection()
+    
+    # Get API Key
+    key_row = conn.execute("SELECT value FROM user_settings WHERE user_id=? AND key='gemini_api_key'", (user_id,)).fetchone()
+    api_key = key_row['value'] if key_row else None
+    
+    if not api_key:
+        conn.close()
+        return jsonify({"status": "error", "message": "Gemini API Key required for embeddings"}), 400
+        
+    # Get all videos
+    videos = conn.execute('''
+        SELECT v.path, v.title, m.title as module_title, c.title as course_title 
+        FROM videos v
+        JOIN modules m ON v.module_id = m.id
+        JOIN courses c ON m.course_id = c.id
+    ''').fetchall()
+    
+    count = 0
+    for v in videos:
+        # Check if exists
+        exists = conn.execute('SELECT 1 FROM video_embeddings WHERE video_path=?', (v['path'],)).fetchone()
+        if exists: continue
+        
+        # Create text representation
+        text = f"{v['course_title']} - {v['module_title']} - {v['title']}"
+        
+        # Generate
+        emb = get_embedding(text, api_key)
+        if emb:
+            conn.execute('INSERT INTO video_embeddings (video_path, embedding) VALUES (?, ?)', 
+                         (v['path'], json.dumps(emb)))
+            count += 1
+            # Rate limit a bit just in case
+            time.sleep(0.1)
+            
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "success", "generated": count})
+
+# --- Tagging API ---
+
+@app.route('/api/tags', methods=['GET'])
+def get_tags():
+    conn = get_db_connection()
+    tags = conn.execute('SELECT * FROM tags ORDER BY name').fetchall()
+    conn.close()
+    return jsonify([dict(t) for t in tags])
+
+@app.route('/api/tags', methods=['POST'])
+@login_required
+def create_tag():
+    name = request.json.get('name')
+    color = request.json.get('color', '#3b82f6')
+    if not name:
+        return jsonify({"status": "error", "message": "Name required"}), 400
+    
+    conn = get_db_connection()
+    try:
+        conn.execute('INSERT INTO tags (name, color) VALUES (?, ?)', (name, color))
+        conn.commit()
+        tag_id = conn.execute('SELECT last_insert_rowid()').fetchone()[0]
+        conn.close()
+        return jsonify({"status": "success", "tag": {"id": tag_id, "name": name, "color": color}})
+    except sqlite3.IntegrityError:
+        conn.close()
+        return jsonify({"status": "error", "message": "Tag already exists"}), 400
+
+@app.route('/api/tag_item', methods=['POST'])
+@login_required
+def tag_item():
+    tag_id = request.json.get('tag_id')
+    item_type = request.json.get('item_type') # 'course', 'video'
+    item_id = request.json.get('item_id') # course_id or video_path
+    
+    conn = get_db_connection()
+    try:
+        conn.execute('INSERT INTO item_tags (tag_id, item_type, item_id) VALUES (?, ?, ?)', (tag_id, item_type, str(item_id)))
+        conn.commit()
+    except sqlite3.IntegrityError:
+        pass # Already tagged
+    conn.close()
+    return jsonify({"status": "success"})
+
+@app.route('/api/untag_item', methods=['POST'])
+@login_required
+def untag_item():
+    tag_id = request.json.get('tag_id')
+    item_type = request.json.get('item_type')
+    item_id = request.json.get('item_id')
+    
+    conn = get_db_connection()
+    conn.execute('DELETE FROM item_tags WHERE tag_id=? AND item_type=? AND item_id=?', (tag_id, item_type, str(item_id)))
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "success"})
+
+@app.route('/api/get_item_tags', methods=['GET'])
+def get_item_tags():
+    item_type = request.args.get('item_type')
+    item_id = request.args.get('item_id')
+    
+    conn = get_db_connection()
+    rows = conn.execute('''
+        SELECT t.* FROM tags t
+        JOIN item_tags it ON t.id = it.tag_id
+        WHERE it.item_type = ? AND it.item_id = ?
+    ''', (item_type, str(item_id))).fetchall()
+    conn.close()
+    return jsonify([dict(r) for r in rows])
+
+# --- RSS Feed API ---
 @login_required
 def ai_chat():
     if not genai:
@@ -2872,6 +3320,345 @@ def download_certificate(course_id):
     
     buffer.seek(0)
     return send_file(buffer, as_attachment=True, download_name=f"Certificate_{course['title'][:20]}.pdf", mimetype='application/pdf')
+
+# --- RSS Feed API ---
+
+@app.route('/api/generate_rss_token', methods=['POST'])
+@login_required
+def generate_rss_token():
+    user_id = current_user.id
+    token = uuid.uuid4().hex
+    conn = get_db_connection()
+    conn.execute('UPDATE users SET rss_token = ? WHERE id = ?', (token, user_id))
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "success", "token": token})
+
+@app.route('/api/scrape_metadata', methods=['POST'])
+@login_required
+def scrape_metadata():
+    url = request.json.get('url')
+    course_id = request.json.get('course_id')
+    
+    if not url or not course_id:
+        return jsonify({"status": "error", "message": "URL and Course ID required"}), 400
+        
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+        resp = requests.get(url, headers=headers, timeout=10)
+        resp.raise_for_status()
+        html = resp.text
+        
+        # Regex to find og tags
+        og_tags = {}
+        for match in re.finditer(r'<meta\s+(?:property|name)=[\'"]og:([^\'"]+)[\'"]\s+content=[\'"]([^\'"]+)[\'"]', html, re.IGNORECASE):
+            og_tags[match.group(1)] = match.group(2)
+            
+        title = og_tags.get('title')
+        desc = og_tags.get('description')
+        image = og_tags.get('image')
+        
+        conn = get_db_connection()
+        
+        updates = []
+        params = []
+        
+        if desc:
+            updates.append("description = ?")
+            params.append(desc)
+            
+        if title:
+            updates.append("alternate_title = ?")
+            params.append(title)
+            
+        if updates:
+            params.append(course_id)
+            conn.execute(f'UPDATE courses SET {", ".join(updates)} WHERE id = ?', params)
+            
+        # Download Image if exists
+        saved_image = False
+        if image:
+            try:
+                img_resp = requests.get(image, headers=headers, timeout=10)
+                if img_resp.status_code == 200:
+                    course = conn.execute('SELECT folder_name FROM courses WHERE id=?', (course_id,)).fetchone()
+                    if course:
+                        # Determine ext
+                        ext = 'jpg'
+                        if 'png' in image: ext = 'png'
+                        if 'webp' in image: ext = 'webp'
+                        
+                        save_path = os.path.join(COURSES_DIR, course['folder_name'], f"cover.{ext}")
+                        with open(save_path, 'wb') as f:
+                            f.write(img_resp.content)
+                        saved_image = True
+            except:
+                pass
+                
+        conn.commit()
+        conn.close()
+        
+        return jsonify({
+            "status": "success", 
+            "title": title, 
+            "description": desc, 
+            "image_saved": saved_image
+        })
+        
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/import_youtube', methods=['POST'])
+@login_required
+def import_youtube():
+    url = request.json.get('url')
+    if not url: return jsonify({"status":"error"}), 400
+    
+    conn = get_db_connection()
+    try:
+        ydl_opts = {
+            'extract_flat': True, 
+            'quiet': True,
+            'ignoreerrors': True
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            
+            title = info.get('title', 'YouTube Playlist')
+            safe_title = "".join([c for c in title if c.isalpha() or c.isdigit() or c==' ']).strip().replace(' ', '_')
+            
+            # Check existing
+            exists = conn.execute('SELECT id FROM courses WHERE folder_name = ?', ("YT_" + safe_title,)).fetchone()
+            if exists:
+                conn.close()
+                return jsonify({"status": "error", "message": "Course already exists"}), 400
+                
+            # Create Course
+            conn.execute('INSERT INTO courses (title, folder_name, source_type, source_url) VALUES (?, ?, ?, ?)', 
+                         (title, "YT_" + safe_title, 'youtube', url))
+            course_id = conn.lastrowid
+            
+            # Create Module
+            conn.execute('INSERT INTO modules (course_id, title, order_index) VALUES (?, ?, ?)', (course_id, "Videos", 0))
+            module_id = conn.lastrowid
+            
+            entries = info.get('entries', [])
+            for idx, entry in enumerate(entries):
+                if not entry: continue
+                v_title = entry.get('title', f'Video {idx+1}')
+                v_id = entry.get('id')
+                v_dur = entry.get('duration', 0)
+                
+                conn.execute('''
+                    INSERT INTO videos (module_id, title, filename, path, order_index, duration, item_type, source_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (module_id, v_title, "youtube_video", "yt:" + v_id, idx, v_dur, 'video', v_id))
+                
+        conn.commit()
+        return jsonify({"status": "success"})
+    except Exception as e:
+        conn.close()
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+# --- TTS API ---
+@app.route('/api/tts', methods=['POST'])
+@login_required
+def tts_generate():
+    text = request.json.get('text')
+    if not text: return jsonify({"status":"error"}), 400
+    
+    try:
+        tts = gTTS(text, lang='en')
+        f = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
+        tts.save(f.name)
+        f.close()
+        return send_file(f.name, mimetype='audio/mpeg')
+    except Exception as e:
+        return jsonify({"status":"error", "message":str(e)}), 500
+
+# --- Anki Export API ---
+@app.route('/api/export_anki')
+@login_required
+def export_anki():
+    user_id = current_user.id
+    course_id = request.args.get('course_id')
+    
+    conn = get_db_connection()
+    if course_id:
+        cards = conn.execute('SELECT * FROM flashcards WHERE user_id=? AND course_id=?', (user_id, course_id)).fetchall()
+        course = conn.execute('SELECT title FROM courses WHERE id=?', (course_id,)).fetchone()
+        deck_name = f"SkillForge - {course['title']}" if course else "SkillForge Deck"
+    else:
+        cards = conn.execute('SELECT * FROM flashcards WHERE user_id=?', (user_id,)).fetchall()
+        deck_name = "SkillForge All Cards"
+    conn.close()
+    
+    if not cards:
+        return "No cards to export", 400
+        
+    deck_id = int(time.time())
+    deck = genanki.Deck(deck_id, deck_name)
+    model = genanki.Model(
+        1607392319,
+        'SkillForge Card',
+        fields=[{'name': 'Question'}, {'name': 'Answer'}, {'name': 'Source'}],
+        templates=[{
+            'name': 'Card 1',
+            'qfmt': '{{Question}}<br><small>{{Source}}</small>',
+            'afmt': '{{FrontSide}}<hr id="answer">{{Answer}}',
+        }]
+    )
+    
+    for c in cards:
+        note = genanki.Note(model=model, fields=[c['front'], c['back'], c['video_path'] or ''])
+        deck.add_note(note)
+        
+    package = genanki.Package(deck)
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.apkg')
+    package.write_to_file(tmp.name)
+    tmp.close()
+    
+    return send_file(tmp.name, as_attachment=True, download_name=f"{deck_name}.apkg")
+
+# --- Comment APIs ---
+@app.route('/api/comments', methods=['GET'])
+@login_required
+def get_comments():
+    video_path = request.args.get('video_path')
+    conn = get_db_connection()
+    rows = conn.execute('''
+        SELECT c.*, u.name as user_name, u.profile_pic 
+        FROM comments c 
+        JOIN users u ON c.user_id = u.id 
+        WHERE c.video_path = ? 
+        ORDER BY c.timestamp ASC
+    ''', (video_path,)).fetchall()
+    conn.close()
+    return jsonify([dict(r) for r in rows])
+
+@app.route('/api/comments', methods=['POST'])
+@login_required
+def post_comment():
+    data = request.json
+    conn = get_db_connection()
+    conn.execute('INSERT INTO comments (user_id, video_path, timestamp, text, parent_id) VALUES (?, ?, ?, ?, ?)',
+                 (current_user.id, data['video_path'], data['timestamp'], data['text'], data.get('parent_id')))
+    conn.commit()
+    conn.close()
+    return jsonify({"status":"success"})
+
+# --- Graph Data API ---
+@app.route('/graph')
+@login_required
+def graph_page():
+    return render_template('graph.html')
+
+@app.route('/api/graph_data')
+@login_required
+def get_graph_data():
+    conn = get_db_connection()
+    # Nodes
+    videos = conn.execute('''
+        SELECT v.path, v.title, c.title as course_title, m.title as module_title, e.embedding
+        FROM videos v
+        JOIN modules m ON v.module_id = m.id
+        JOIN courses c ON m.course_id = c.id
+        JOIN video_embeddings e ON v.path = e.video_path
+    ''').fetchall()
+    
+    nodes = []
+    links = []
+    video_list = []
+    
+    for v in videos:
+        try:
+            emb = json.loads(v['embedding'])
+            nodes.append({
+                "id": v['path'],
+                "name": v['title'],
+                "group": v['course_title'],
+                "module": v['module_title']
+            })
+            video_list.append({'id': v['path'], 'emb': emb})
+        except: pass
+        
+    # Generate Links based on similarity
+    # Limit to top connections to avoid spaghetti
+    for i in range(len(video_list)):
+        for j in range(i+1, len(video_list)):
+            score = cosine_similarity(video_list[i]['emb'], video_list[j]['emb'])
+            if score > 0.75: # Threshold
+                links.append({"source": video_list[i]['id'], "target": video_list[j]['id'], "value": score})
+                
+    conn.close()
+    return jsonify({"nodes": nodes, "links": links})
+
+@app.route('/feed/<token>/<int:course_id>/feed.xml')
+def course_rss_feed(token, course_id):
+    conn = get_db_connection()
+    user = conn.execute('SELECT * FROM users WHERE rss_token = ?', (token,)).fetchone()
+    
+    if not user:
+        conn.close()
+        return "Unauthorized", 401
+    
+    course = conn.execute('SELECT * FROM courses WHERE id = ?', (course_id,)).fetchone()
+    if not course:
+        conn.close()
+        return "Course not found", 404
+        
+    modules = conn.execute('SELECT * FROM modules WHERE course_id = ? ORDER BY order_index', (course_id,)).fetchall()
+    
+    # Build RSS
+    base_url = request.url_root.rstrip('/')
+    
+    xml = ['<?xml version="1.0" encoding="UTF-8"?>']
+    xml.append('<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:content="http://purl.org/rss/1.0/modules/content/">')
+    xml.append('<channel>')
+    xml.append(f'<title>{course["title"]}</title>')
+    desc = course["description"] or "A SkillForge Course"
+    xml.append(f'<description><![CDATA[{desc}]]></description>')
+    xml.append(f'<link>{base_url}/course/{course_id}</link>')
+    
+    # Add Image
+    course_folder = os.path.join(COURSES_DIR, course['folder_name'])
+    thumb_url = None
+    for ext in ['jpg', 'png', 'jpeg', 'webp']:
+        if os.path.exists(os.path.join(course_folder, f"cover.{ext}")):
+                thumb_url = f"{base_url}/course_file/{course['id']}/cover.{ext}"
+                break
+    if thumb_url:
+        xml.append(f'<image><url>{thumb_url}</url><title>{course["title"]}</title><link>{base_url}</link></image>')
+        xml.append(f'<itunes:image href="{thumb_url}"/>')
+    
+    for module in modules:
+        videos = conn.execute('SELECT * FROM videos WHERE module_id = ? ORDER BY order_index', (module['id'],)).fetchall()
+        for video in videos:
+            if video['item_type'] != 'video': continue
+            
+            title = f"{module['title']} - {video['title']}"
+            file_url = f"{base_url}/media/{video['path']}"
+            guid = f"{course_id}-{video['id']}"
+            
+            # Estimate file size if possible (optional)
+            file_size = 0
+            try:
+                full_path = os.path.join(COURSES_DIR, video['path'])
+                file_size = os.path.getsize(full_path)
+            except: pass
+            
+            xml.append('<item>')
+            xml.append(f'<title>{title}</title>')
+            xml.append(f'<guid isPermaLink="false">{guid}</guid>')
+            xml.append(f'<enclosure url="{file_url}" length="{file_size}" type="video/mp4"/>')
+            xml.append(f'<pubDate>{datetime.datetime.now().strftime("%a, %d %b %Y %H:%M:%S GMT")}</pubDate>') # Fake date or use file mtime
+            xml.append('</item>')
+            
+    xml.append('</channel>')
+    xml.append('</rss>')
+    
+    conn.close()
+    return Response("\n".join(xml), mimetype='application/rss+xml')
 
 # Ensure DB is initialized on startup
 with app.app_context():

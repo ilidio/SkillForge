@@ -5,3 +5,6 @@ tinytag
 google-genai
 requests
 faster-whisper
+yt-dlp
+gTTS
+genanki

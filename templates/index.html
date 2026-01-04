@@ -339,22 +339,86 @@
         /* Favorite Button */
         .fav-btn {
             position: absolute;
-            top: 20px;
-            right: 20px;
-            background: none;
+            top: 10px;
+            right: 10px;
+            background: rgba(0,0,0,0.3);
             border: none;
             font-size: 1.2em;
             cursor: pointer;
             z-index: 10;
-            color: #ccc; /* Default grey */
-            transition: color 0.2s, transform 0.1s;
+            color: #ccc;
+            transition: all 0.2s;
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
         .fav-btn:hover {
             transform: scale(1.1);
             color: #ffb700;
+            background: rgba(0,0,0,0.6);
         }
         .fav-btn.active {
-            color: #ffb700; /* Gold */
+            color: #ffb700;
+        }
+
+        /* Tag Button */
+        .tag-btn {
+            position: absolute;
+            top: 10px;
+            right: 50px;
+            background: rgba(0,0,0,0.3);
+            border: none;
+            font-size: 1em;
+            cursor: pointer;
+            z-index: 10;
+            color: white;
+            transition: all 0.2s;
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .tag-btn:hover {
+            background: rgba(0,0,0,0.6);
+            transform: scale(1.1);
+        }
+        
+        .tag-pill {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.7em;
+            font-weight: 600;
+            color: white;
+            margin-right: 5px;
+            margin-bottom: 5px;
+        }
+
+        .tag-filter-bar {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-bottom: 20px;
+        }
+        .filter-chip {
+            padding: 6px 12px;
+            border-radius: 16px;
+            border: 1px solid var(--border-color);
+            background: var(--bg-card);
+            cursor: pointer;
+            font-size: 0.9em;
+            transition: all 0.2s;
+            user-select: none;
+        }
+        .filter-chip.active {
+            background: var(--primary-color);
+            color: white;
+            border-color: var(--primary-color);
         }
         
         /* Helper for no results */
@@ -437,6 +501,9 @@
                         </div>
                         <span class="user-name-text" style="font-weight: 500;">{{ current_user.name }}</span>
                     </div>
+                    {% if current_user.is_admin %}
+                    <a href="/admin" class="settings-link" style="background: #000; color: white; border: none;" title="Admin Dashboard"><span class="btn-icon">🛡️</span></a>
+                    {% endif %}
                     <a href="/analytics" class="settings-link" style="background: #2e7d32; color: white; border: none;" title="View your learning statistics and AI usage"><span class="btn-icon">📊</span> <span class="btn-text">Stats</span></a>
                     <a href="/resources" class="settings-link" title="Access all course files and documents"><span class="btn-icon">📂</span> <span class="btn-text">Vault</span></a>
                     <a href="/logout" class="settings-link" style="border-color: #d32f2f; color: #d32f2f;" title="Sign out of your account"><span class="btn-icon">🚪</span> <span class="btn-text">Logout</span></a>
@@ -445,6 +512,8 @@
                     <a href="/login" class="settings-link" style="background: var(--primary-color); color: white; border: none;" title="Log in to your account">Login</a>
                 {% endif %}
                 <button class="theme-toggle" onclick="toggleTheme()" title="Switch between Light and Dark mode"><span class="btn-icon">🌓</span></button>
+                <a href="/graph" class="settings-link" style="border-color: #9c27b0; color: #9c27b0;" title="3D Knowledge Graph"><span class="btn-icon">🕸️</span> <span class="btn-text">Graph</span></a>
+                <a href="/calendar" class="settings-link" title="Study Calendar"><span class="btn-icon">📅</span> <span class="btn-text">Calendar</span></a>
                 <a href="/study" class="settings-link" style="background: var(--bg-card); border-color: var(--primary-color); color: var(--primary-color);" title="Review your flashcards"><span class="btn-icon">🧠</span> <span class="btn-text">Study</span></a>
                 <a href="/settings" class="settings-link" title="Manage application settings and course data"><span class="btn-icon">⚙️</span> <span class="btn-text">Settings</span></a>
             </div>
@@ -489,6 +558,18 @@
             <span class="search-icon">🔍</span>
             <input type="text" id="courseSearch" class="search-input" placeholder="Search for courses..." autocomplete="off">
         </div>
+
+        {% if all_tags %}
+        <div class="tag-filter-bar" id="tagFilterBar">
+            <div class="filter-chip active" data-tag="all">All</div>
+            {% for tag in all_tags %}
+            <div class="filter-chip" data-tag="{{ tag.id }}" style="--hover-color: {{ tag.color }}">
+                <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:{{ tag.color }}; margin-right:5px;"></span>
+                {{ tag.name }}
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
 
         {% if daily_review %}
         <div class="review-section" style="margin-bottom: 30px; background: rgba(255, 183, 0, 0.1); border: 1px solid #ffb700; padding: 20px; border-radius: 8px;">
@@ -567,13 +648,24 @@
 
         <div class="course-grid" id="courseGrid">
             {% for course in courses %}
-            <div class="course-card-wrapper" data-fav="{{ 1 if course.is_favorite else 0 }}">
+            <div class="course-card-wrapper" 
+                 data-fav="{{ 1 if course.is_favorite else 0 }}"
+                 data-tags="{{ course.tags | map(attribute='id') | list | join(',') }}">
                 <a href="/course/{{ course.id }}" class="course-card">
                     {% if course.thumbnail %}
                     <img src="{{ course.thumbnail }}" class="course-thumbnail" alt="{{ course.title }}">
                     {% endif %}
                     <div class="course-content">
                         <div class="course-title">{{ course.title }}</div>
+                        
+                        {% if course.tags %}
+                        <div style="margin-bottom: 8px;">
+                            {% for tag in course.tags %}
+                            <span class="tag-pill" style="background-color: {{ tag.color }}">{{ tag.name }}</span>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+
                         <div class="course-meta">Added: {{ course.created_at }}</div>
                         
                         <div class="progress-row">
@@ -612,6 +704,11 @@
                         title="Toggle Favorite">
                     ★
                 </button>
+                <button class="tag-btn" 
+                        onclick="manageTags(event, {{ course.id }}, '{{ course.title }}')" 
+                        title="Manage Tags">
+                    🏷️
+                </button>
             </div>
             {% else %}
             <p>No courses found. Add folders to the 'courses' directory.</p>
@@ -624,7 +721,120 @@
     </div>
 
     <script>
+        // Tag Data
+        const ALL_TAGS = {{ all_tags | tojson | safe }} || [];
+
         // ... existing theme logic ...
+
+        // Tag Filter Logic
+        const tagChips = document.querySelectorAll('.filter-chip');
+        tagChips.forEach(chip => {
+            chip.addEventListener('click', () => {
+                // Toggle active class
+                tagChips.forEach(c => c.classList.remove('active'));
+                chip.classList.add('active');
+                
+                const selectedTag = chip.dataset.tag;
+                const wrappers = document.querySelectorAll('.course-card-wrapper');
+                let visibleCount = 0;
+                
+                wrappers.forEach(w => {
+                    if (selectedTag === 'all') {
+                        w.style.display = '';
+                        visibleCount++;
+                    } else {
+                        const tags = w.dataset.tags ? w.dataset.tags.split(',') : [];
+                        if (tags.includes(selectedTag)) {
+                            w.style.display = '';
+                            visibleCount++;
+                        } else {
+                            w.style.display = 'none';
+                        }
+                    }
+                });
+                 
+                const noResults = document.getElementById('no-results');
+                if (visibleCount === 0 && wrappers.length > 0) {
+                    noResults.style.display = "block";
+                    noResults.innerText = "No courses found with this tag.";
+                } else {
+                    noResults.style.display = "none";
+                }
+            });
+        });
+
+        // Manage Tags Modal
+        window.manageTags = function(event, courseId, courseTitle) {
+            event.preventDefault();
+            event.stopPropagation();
+            
+            // Fetch current tags for this item to check boxes
+            fetch(`/api/get_item_tags?item_type=course&item_id=${courseId}`)
+            .then(res => res.json())
+            .then(currentTags => {
+                const currentTagIds = new Set(currentTags.map(t => t.id));
+                
+                let html = '<div style="display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 20px;">';
+                ALL_TAGS.forEach(tag => {
+                    const checked = currentTagIds.has(tag.id) ? 'checked' : '';
+                    html += `
+                        <label style="background: ${tag.color}22; border: 1px solid ${tag.color}; padding: 5px 10px; border-radius: 15px; cursor: pointer; display: flex; align-items: center; gap: 5px;">
+                            <input type="checkbox" onchange="toggleTag(${tag.id}, 'course', ${courseId}, this.checked)" ${checked}>
+                            <span style="color: ${tag.color}; font-weight: bold;">${tag.name}</span>
+                        </label>
+                    `;
+                });
+                html += '</div>';
+                
+                html += `
+                    <div style="border-top: 1px solid var(--border-color); padding-top: 15px;">
+                        <input type="text" id="newTagName" placeholder="New Tag Name" class="swal2-input" style="width: 60%; display: inline-block; margin: 0;">
+                        <input type="color" id="newTagColor" value="#3b82f6" style="width: 50px; height: 40px; border: none; vertical-align: middle; cursor: pointer;">
+                        <button onclick="createNewTag(${courseId})" style="background: var(--primary-color); color: white; border: none; padding: 10px 15px; border-radius: 4px; cursor: pointer;">Add</button>
+                    </div>
+                `;
+                
+                Swal.fire({
+                    title: `Tags: ${courseTitle}`,
+                    html: html,
+                    showConfirmButton: false,
+                    showCloseButton: true,
+                    didClose: () => window.location.reload() // Reload to reflect changes
+                });
+            });
+        };
+        
+        window.toggleTag = function(tagId, itemType, itemId, isAdded) {
+            const url = isAdded ? '/api/tag_item' : '/api/untag_item';
+            fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ tag_id: tagId, item_type: itemType, item_id: itemId })
+            });
+        };
+        
+        window.createNewTag = function(courseId) {
+            const name = document.getElementById('newTagName').value;
+            const color = document.getElementById('newTagColor').value;
+            
+            if (!name) return;
+            
+            fetch('/api/tags', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: name, color: color })
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    // Refresh modal
+                    Swal.close();
+                    window.manageTags({preventDefault:()=>{}, stopPropagation:()=>{}}, courseId, ''); // Re-open
+                } else {
+                    Swal.showValidationMessage(data.message);
+                }
+            });
+        };
 
         // Playlist Logic
         function loadPlaylists() {

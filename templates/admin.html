@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Dashboard - SkillForge</title>
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <style>
+        :root {
+            --bg-body: #f7f9fa;
+            --bg-card: #ffffff;
+            --text-main: #2d2f31;
+            --text-secondary: #6a6f73;
+            --border-color: #d1d7dc;
+            --primary-color: #5022c3;
+        }
+        [data-theme="dark"] {
+            --bg-body: #1c1d1f;
+            --bg-card: #2d2f31;
+            --text-main: #e0e0e0;
+            --text-secondary: #a0a0a0;
+            --border-color: #3e4143;
+            --primary-color: #cf9fff;
+        }
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            background: var(--bg-body);
+            color: var(--text-main);
+            margin: 0; padding: 20px;
+        }
+        .container { max-width: 1000px; margin: 0 auto; }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; }
+        .back-link { text-decoration: none; color: var(--primary-color); font-weight: bold; }
+        
+        table { width: 100%; border-collapse: collapse; background: var(--bg-card); border-radius: 8px; overflow: hidden; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        th, td { padding: 15px; text-align: left; border-bottom: 1px solid var(--border-color); }
+        th { background: rgba(0,0,0,0.05); font-weight: 600; }
+        tr:hover { background: rgba(0,0,0,0.02); }
+        
+        .btn { padding: 5px 10px; border-radius: 4px; border: 1px solid var(--border-color); background: none; cursor: pointer; color: var(--text-main); font-size: 0.9em; }
+        .btn-danger { color: #d32f2f; border-color: #ffcfcf; }
+        .btn-danger:hover { background: #ffebeb; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <a href="/" class="back-link">← Home</a>
+            <h1>Admin Dashboard</h1>
+        </div>
+        
+        <table>
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>User</th>
+                    <th>Name</th>
+                    <th>Joined</th>
+                    <th>Progress</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for user in users %}
+                <tr id="row-{{ user.id }}">
+                    <td>{{ user.id }}</td>
+                    <td>{{ user.username }}</td>
+                    <td>{{ user.name }}</td>
+                    <td>{{ user.joined }}</td>
+                    <td>
+                        {{ (user.total_time / 3600) | round(1) }}h watched<br>
+                        {{ user.completed }} videos done
+                    </td>
+                    <td>
+                        <button class="btn" onclick="resetPassword({{ user.id }}, '{{ user.username }}')">Reset Pass</button>
+                        {% if user.id != current_user.id %}
+                        <button class="btn btn-danger" onclick="deleteUser({{ user.id }})">Delete</button>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    
+    <script>
+        (function() {
+            const saved = localStorage.getItem('theme');
+            if (saved) document.documentElement.setAttribute('data-theme', saved);
+        })();
+
+        function resetPassword(id, name) {
+            Swal.fire({
+                title: `Reset Password for ${name}`,
+                input: 'password',
+                inputPlaceholder: 'New Password',
+                showCancelButton: true
+            }).then((res) => {
+                if (res.isConfirmed && res.value) {
+                    fetch('/api/admin/reset_password', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ user_id: id, password: res.value })
+                    }).then(() => Swal.fire('Success', 'Password updated', 'success'));
+                }
+            });
+        }
+        
+        function deleteUser(id) {
+            Swal.fire({
+                title: 'Delete User?',
+                text: 'This cannot be undone. All their progress will be lost.',
+                icon: 'warning',
+                showCancelButton: true,
+                confirmButtonColor: '#d33',
+                confirmButtonText: 'Yes, Delete'
+            }).then((res) => {
+                if (res.isConfirmed) {
+                    fetch('/api/admin/delete_user', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ user_id: id })
+                    }).then(r => r.json()).then(d => {
+                        if(d.status === 'success') document.getElementById('row-'+id).remove();
+                        else Swal.fire('Error', d.message, 'error');
+                    });
+                }
+            });
+        }
+    </script>
+</body>
+</html>

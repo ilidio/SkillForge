@@ -65,15 +65,28 @@
     <div class="container">
         <div class="header">
             <a href="/" class="back-link">← Home</a>
-            <h1>Search: "{{ query }}"</h1>
+            <h1>Search</h1>
         </div>
+        
+        <form action="/search" method="get" style="margin-bottom: 30px; display: flex; gap: 10px; align-items: center;">
+            <input type="text" name="q" value="{{ query }}" placeholder="Search..." style="flex: 1; padding: 10px; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-card); color: var(--text-main);">
+            <label style="display: flex; align-items: center; gap: 5px; cursor: pointer; white-space: nowrap;">
+                <input type="checkbox" name="semantic" value="true" {% if request.args.get('semantic') == 'true' %}checked{% endif %}> Semantic (AI)
+            </label>
+            <button type="submit" style="padding: 10px 20px; background: var(--primary-color); color: white; border: none; border-radius: 4px; cursor: pointer;">Search</button>
+        </form>
         
         <div class="section-title">Videos</div>
         {% if results.videos %}
             {% for v in results.videos %}
-            <div class="result-item">
+            <div class="result-item" style="{% if v.is_semantic %}border-color: var(--primary-color); background: rgba(80, 34, 195, 0.05);{% endif %}">
                 <a href="/course/{{ v.course_id }}">
-                    <div class="result-title">{{ v.title }}</div>
+                    <div class="result-title">
+                        {{ v.title }}
+                        {% if v.is_semantic %}
+                        <span style="font-size: 0.7em; background: var(--primary-color); color: white; padding: 2px 6px; border-radius: 4px; margin-left: 8px;">AI Match</span>
+                        {% endif %}
+                    </div>
                     <div class="result-meta">in {{ v.course_title }}</div>
                 </a>
             </div>

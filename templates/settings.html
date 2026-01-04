@@ -322,14 +322,45 @@
         <div class="global-actions" style="border-color: var(--primary-color); background: var(--bg-card);">
             <div>
                 <div class="danger-label" style="color: var(--primary-color);">Backup & Restore</div>
-                <div style="font-size: 0.9em; color: var(--text-secondary); margin-top: 4px;">Export your progress, notes, and bookmarks to a JSON file.</div>
+                <div style="font-size: 0.9em; color: var(--text-secondary); margin-top: 4px;">Export your progress, notes, and bookmarks.</div>
             </div>
             <div style="display: flex; gap: 10px;">
-                <button class="btn" onclick="exportData()" style="color: var(--primary-color); border-color: var(--primary-color);">Export Data</button>
-                <button class="btn" onclick="document.getElementById('importFile').click()">Import Data</button>
+                <button class="btn" onclick="exportData()" style="color: var(--primary-color); border-color: var(--primary-color);">Export JSON</button>
+                <button class="btn" onclick="window.location.href='/api/export_anki'" style="color: #2196F3; border-color: #2196F3;">Export Anki</button>
+                <button class="btn" onclick="document.getElementById('importFile').click()">Import JSON</button>
                 <input type="file" id="importFile" style="display: none;" onchange="importData(this)">
             </div>
         </div>
+
+        <div class="global-actions" style="border-color: #2196F3; background: var(--bg-card);">
+            <div>
+                <div class="danger-label" style="color: #2196F3;">Podcast / RSS Mode</div>
+                <div style="font-size: 0.9em; color: var(--text-secondary); margin-top: 4px;">Listen to your courses in any podcast app.</div>
+            </div>
+            <div style="display: flex; gap: 10px; align-items: center; width: 60%;">
+                {% if rss_token %}
+                    <input type="text" value="{{ rss_token }}" readonly onclick="this.select()" style="flex: 1; padding: 8px; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-body); color: var(--text-secondary);">
+                    <button class="btn" onclick="generateRSSToken()" style="white-space:nowrap;">Regenerate Token</button>
+                {% else %}
+                    <span style="color: var(--text-secondary); margin-right: 10px;">No token generated.</span>
+                    <button class="btn" onclick="generateRSSToken()">Generate Token</button>
+                {% endif %}
+            </div>
+        </div>
+
+        {% if rss_token %}
+        <div class="global-actions" style="border-color: #2196F3; background: var(--bg-card); flex-direction: column; align-items: flex-start;">
+            <div class="danger-label" style="color: #2196F3; margin-bottom: 15px;">Course Podcast Feeds</div>
+            <div style="width: 100%; display: flex; flex-direction: column; gap: 10px;">
+                {% for course in courses %}
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px; background: var(--bg-body); border-radius: 4px; border: 1px solid var(--border-color);">
+                    <span style="font-weight: 600;">{{ course.title }}</span>
+                    <button class="btn" onclick="copyRSS('{{ request.url_root.rstrip('/') }}/feed/{{ rss_token }}/{{ course.id }}/feed.xml')" style="color: var(--primary-color); border-color: var(--primary-color);">Copy Link</button>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
 
         <div class="global-actions" style="border-color: #2196F3; background: var(--bg-card);">
             <div>
@@ -365,6 +396,7 @@
 
                 <button class="btn" onclick="saveAIConfig()" style="color: #2196F3; border-color: #2196F3;">Save Config</button>
                 <button class="btn" onclick="testAI()">Test AI</button>
+                <button class="btn" onclick="generateEmbeddings()" title="Generate embeddings for semantic search">Index for Search</button>
             </div>
         </div>
 
@@ -442,10 +474,28 @@
                 <span class="close-modal" onclick="closeEditor()">&times;</span>
             </div>
             
+            <div style="margin-bottom: 15px; background: var(--hover-bg); padding: 10px; border-radius: 4px;">
+                <label style="font-weight: bold; margin-bottom: 5px; display: block;">Import YouTube Playlist</label>
+                <div style="display: flex; gap: 10px;">
+                    <input type="text" id="ytUrl" placeholder="Playlist URL" style="flex: 1; padding: 8px; border: 1px solid var(--border-color); border-radius: 4px;">
+                    <button class="btn" onclick="importYouTube()">Import</button>
+                </div>
+                <div style="font-size: 0.85em; color: var(--text-secondary); margin-top: 5px;">Creates a new course from playlist. No download required.</div>
+            </div>
+
             <div style="margin-bottom: 15px;">
                 <label for="altTitle" style="display:block; margin-bottom:5px; font-weight:bold;">Alternate Title (for Certificate)</label>
                 <input type="text" id="altTitle" placeholder="Enter a shorter title if the original is too long" 
                        style="width:100%; padding:10px; border:1px solid var(--border-color); border-radius:4px; box-sizing:border-box;">
+            </div>
+            
+            <div style="margin-bottom: 15px; background: var(--hover-bg); padding: 10px; border-radius: 4px;">
+                <label style="font-weight: bold; margin-bottom: 5px; display: block;">Auto-Fill from URL</label>
+                <div style="display: flex; gap: 10px;">
+                    <input type="text" id="scrapeUrl" placeholder="Course URL (Udemy, YouTube, etc.)" style="flex: 1; padding: 8px; border: 1px solid var(--border-color); border-radius: 4px;">
+                    <button class="btn" onclick="scrapeMetadata()">Fetch</button>
+                </div>
+                <div style="font-size: 0.85em; color: var(--text-secondary); margin-top: 5px;">Attempts to fetch Description, Title, and Cover Image.</div>
             </div>
 
             <div id="quill-editor" class="editor-container"></div>
@@ -528,6 +578,73 @@
         
         function closeEditor() {
             document.getElementById('editorModal').style.display = "none";
+        }
+        
+        function scrapeMetadata() {
+            const url = document.getElementById('scrapeUrl').value;
+            if (!url) return;
+            
+            const btn = event.target;
+            const originalText = btn.innerText;
+            btn.innerText = 'Fetching...';
+            btn.disabled = true;
+            
+            fetch('/api/scrape_metadata', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ course_id: currentCourseId, url: url })
+            })
+            .then(res => res.json())
+            .then(data => {
+                btn.innerText = originalText;
+                btn.disabled = false;
+                
+                if (data.status === 'success') {
+                    if (data.description) {
+                        const delta = quill.clipboard.convert(data.description);
+                        quill.setContents(delta, 'silent');
+                    }
+                    if (data.title) {
+                        document.getElementById('altTitle').value = data.title;
+                    }
+                    
+                    let msg = 'Metadata updated!';
+                    if (data.image_saved) msg += ' Cover image downloaded.';
+                    Swal.fire('Success', msg, 'success');
+                } else {
+                    Swal.fire('Error', data.message, 'error');
+                }
+            })
+            .catch(err => {
+                 btn.innerText = originalText;
+                 btn.disabled = false;
+                 Swal.fire('Error', err, 'error');
+            });
+        }
+        
+        function importYouTube() {
+            const url = document.getElementById('ytUrl').value;
+            if (!url) return;
+            
+            const btn = event.target;
+            btn.innerText = 'Importing...';
+            btn.disabled = true;
+            
+            fetch('/api/import_youtube', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url: url })
+            })
+            .then(res => res.json())
+            .then(data => {
+                btn.innerText = 'Import';
+                btn.disabled = false;
+                if (data.status === 'success') {
+                    Swal.fire('Success', 'Playlist imported as a new course!', 'success').then(() => location.reload());
+                } else {
+                    Swal.fire('Error', data.message, 'error');
+                }
+            });
         }
         
         // Progress Manager Functions
@@ -677,9 +794,11 @@
                 
                 mod.videos.forEach(vid => {
                     const row = document.createElement('div');
-                    row.style.cssText = 'display: flex; justify-content: space-between; align-items: center; padding: 10px; border-bottom: 1px solid var(--border-color);';
+                    row.style.cssText = 'display: flex; justify-content: space-between; align-items: center; padding: 10px; border-bottom: 1px solid var(--border-color); flex-wrap: wrap; gap: 10px;';
                     
                     const info = document.createElement('div');
+                    info.style.flex = '1';
+                    info.style.minWidth = '200px';
                     
                     // Format time helper
                     const formatTime = (s) => {
@@ -696,24 +815,94 @@
                     
                     info.innerHTML = `<div>${vid.title}</div><div style="font-size: 0.85em; margin-top: 4px;">${status}</div>`;
                     
-                    const btn = document.createElement('button');
-                    btn.innerText = 'Reset';
-                    btn.className = 'btn';
-                    btn.style.cssText = 'font-size: 0.8em; padding: 4px 8px; color: #d32f2f; border-color: #ffcfcf;';
+                    // AI Status & Actions
+                    const aiActions = document.createElement('div');
+                    aiActions.style.cssText = 'display: flex; gap: 8px; align-items: center;';
+                    
+                    // Helper to create asset badge/button
+                    const createAsset = (type, exists, icon, label) => {
+                        const wrapper = document.createElement('div');
+                        if (exists) {
+                            wrapper.innerHTML = `<span title="${label} Ready" style="color: green; font-size: 1.2em;">✅ ${icon}</span>`;
+                        } else {
+                            const btn = document.createElement('button');
+                            btn.innerHTML = `<span style="opacity:0.5;">${icon}</span>`;
+                            btn.title = `Generate ${label}`;
+                            btn.className = 'btn';
+                            btn.style.cssText = 'padding: 2px 6px; font-size: 0.9em;';
+                            btn.onclick = () => generateAsset(vid.path, type, btn);
+                            wrapper.appendChild(btn);
+                        }
+                        return wrapper;
+                    };
+                    
+                    aiActions.appendChild(createAsset('transcript', vid.has_transcript, '📜', 'Transcript'));
+                    aiActions.appendChild(createAsset('summarize', vid.has_summary, '📝', 'Summary'));
+                    aiActions.appendChild(createAsset('quiz', vid.has_quiz, '🎓', 'Quiz'));
+                    
+                    // Reset Button
+                    const resetBtn = document.createElement('button');
+                    resetBtn.innerText = 'Reset';
+                    resetBtn.className = 'btn';
+                    resetBtn.style.cssText = 'font-size: 0.8em; padding: 4px 8px; color: #d32f2f; border-color: #ffcfcf; margin-left: 10px;';
                     
                     if (vid.watched_time === 0 && !vid.is_completed) {
-                        btn.disabled = true;
-                        btn.style.opacity = '0.5';
-                        btn.style.cursor = 'default';
-                        btn.style.borderColor = 'transparent';
+                        resetBtn.disabled = true;
+                        resetBtn.style.opacity = '0.5';
+                        resetBtn.style.cursor = 'default';
+                        resetBtn.style.borderColor = 'transparent';
                     } else {
-                        btn.onclick = () => resetVideoProgress(courseId, vid.path, row);
+                        resetBtn.onclick = () => resetVideoProgress(courseId, vid.path, row);
                     }
                     
                     row.appendChild(info);
-                    row.appendChild(btn);
+                    row.appendChild(aiActions);
+                    row.appendChild(resetBtn);
                     container.appendChild(row);
                 });
+            });
+        }
+        
+        function generateAsset(path, type, btn) {
+            btn.disabled = true;
+            btn.innerHTML = '<span class="btn-icon" style="animation: spin 1s linear infinite;">↻</span>';
+            
+            let url = '/api/ai_chat_context'; // Default for summary/quiz
+            let payload = { video_path: path, context_type: type };
+            
+            if (type === 'transcript') {
+                url = '/api/generate_transcript';
+                // payload is correct
+            }
+            
+            fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    btn.parentNode.innerHTML = `<span title="Generated!" style="color: green; font-size: 1.2em;">✅</span>`;
+                    Swal.fire({
+                        title: 'Success',
+                        text: type.charAt(0).toUpperCase() + type.slice(1) + ' generated successfully!',
+                        icon: 'success',
+                        toast: true,
+                        position: 'top-end',
+                        showConfirmButton: false,
+                        timer: 3000
+                    });
+                } else {
+                    Swal.fire('Error', data.message, 'error');
+                    btn.disabled = false;
+                    btn.innerHTML = type === 'transcript' ? '📜' : (type === 'summarize' ? '📝' : '🎓');
+                }
+            })
+            .catch(err => {
+                Swal.fire('Error', err.toString(), 'error');
+                btn.disabled = false;
+                btn.innerHTML = '?';
             });
         }
         
@@ -921,6 +1110,40 @@
             });
         }
 
+        function generateRSSToken() {
+            Swal.fire({
+                title: 'Generate/Reset Token?',
+                text: 'This will invalidate any existing RSS feeds. Continue?',
+                icon: 'warning',
+                showCancelButton: true,
+                confirmButtonText: 'Yes, generate'
+            }).then((result) => {
+                if (result.isConfirmed) {
+                    fetch('/api/generate_rss_token', {
+                        method: 'POST',
+                    })
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.status === 'success') {
+                            location.reload();
+                        }
+                    });
+                }
+            });
+        }
+
+        function copyRSS(url) {
+            navigator.clipboard.writeText(url).then(() => {
+                Swal.fire({
+                    title: 'Copied!',
+                    text: 'RSS Feed URL copied to clipboard.',
+                    icon: 'success',
+                    timer: 1500,
+                    showConfirmButton: false
+                });
+            });
+        }
+
                 function saveAIConfig() {
                     const provider = document.getElementById('aiProvider').value;
                     const key = document.getElementById('geminiApiKey').value.trim();
@@ -1029,6 +1252,38 @@
                         btn.innerText = originalText;
                         btn.disabled = false;
                         Swal.fire('Request Failed', 'Request failed: ' + err, 'error');
+                    });
+                }
+
+                function generateEmbeddings() {
+                    const btn = event.target;
+                    const originalText = btn.innerText;
+                    btn.innerText = 'Indexing... (Background)';
+                    btn.disabled = true;
+                    
+                    Swal.fire({
+                        title: 'Generate Embeddings?',
+                        text: 'This will iterate all videos and generate embeddings using Gemini. This may consume API quota.',
+                        icon: 'question',
+                        showCancelButton: true,
+                        confirmButtonText: 'Start Indexing'
+                    }).then((result) => {
+                        if (result.isConfirmed) {
+                            fetch('/api/generate_embeddings', { method: 'POST' })
+                            .then(res => res.json())
+                            .then(data => {
+                                btn.innerText = originalText;
+                                btn.disabled = false;
+                                if (data.status === 'success') {
+                                    Swal.fire('Success', `Generated ${data.generated} new embeddings.`, 'success');
+                                } else {
+                                    Swal.fire('Error', data.message, 'error');
+                                }
+                            });
+                        } else {
+                            btn.innerText = originalText;
+                            btn.disabled = false;
+                        }
                     });
                 }
                 

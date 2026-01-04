@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Knowledge Graph - SkillForge</title>
+    <script src="https://unpkg.com/3d-force-graph"></script>
+    <style>
+        body { margin: 0; background: #000011; color: white; font-family: sans-serif; overflow: hidden; }
+        .back-btn { position: absolute; top: 20px; left: 20px; z-index: 100; color: white; text-decoration: none; border: 1px solid white; padding: 10px 20px; border-radius: 4px; background: rgba(0,0,0,0.5); }
+        .back-btn:hover { background: rgba(255,255,255,0.2); }
+        .loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); }
+    </style>
+</head>
+<body>
+    <a href="/" class="back-btn">← Dashboard</a>
+    <div id="graph"></div>
+    <div id="loading" class="loading">Loading 3D Galaxy...</div>
+
+    <script>
+        fetch('/api/graph_data')
+        .then(res => res.json())
+        .then(data => {
+            document.getElementById('loading').style.display = 'none';
+            const Graph = ForceGraph3D()
+                (document.getElementById('graph'))
+                .graphData(data)
+                .nodeAutoColorBy('group')
+                .nodeLabel(node => `${node.group}: ${node.name}`)
+                .onNodeClick(node => {
+                    window.location.href = `/course/0?video=${encodeURIComponent(node.id)}`;
+                })
+                .linkWidth(link => link.value * 2)
+                .linkOpacity(0.5);
+        });
+    </script>
+</body>
+</html>
